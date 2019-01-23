@@ -1,0 +1,630 @@
+---
+title: "BikeShare"
+output: html_document
+---
+
+## Introduction
+
+I wanted to demonstrate some basic exploratory data analysis techniques using R for the 
+Kaggle Bike Share dataset.
+
+Let's load a bunch of libraries we'll need.
+
+```{r}
+library(lubridate)
+library(reshape2)
+library(plyr)
+library(ggplot2)
+library(scales)
+#library(zoo)
+```
+
+## Reading and preparing the data
+
+Read in training data and check out the dataframe structure
+
+```{r}
+train <- read.csv("./BikeShareData/train.csv")
+str(train)
+summary(train)
+```
+
+Datetime came in as a factor. Convert to a POSIXct date. A few of the factors
+came in as integers. Let's convert them too.
+
+```{r}
+train$datetime <- as.POSIXct(train$datetime)
+train$season <- as.factor(train$season)
+train$holiday <- as.factor(train$holiday)
+train$workingday <- as.factor(train$workingday)
+train$weather <- as.factor(train$weather)
+```
+
+
+Each row is an hour. However, we don't know if we get a row for an hour with zero
+bike rentals. We should check this. If we are going to do analysis by hour, we need
+the zeroes (else our estimates will be biased high). One strategy for doing this
+is to create a "seeded" dataframe having all the hourly datetime values and then
+merge this dataframe with our existing train dataframe. Then we can fill in the
+other columns in the rows that had no bike share data. Also, since we only have
+data from the first nineteen days of each month, we need to remove the datetimes
+after the 19th from the seeded dataframe.
+
+First for convenience, let's add some date part columns - hour, DOW, month, day, year. Notice that for the
+date field, we are first using `trunc()`, which returns a POSIXlt date object. However, `plyr` strangeness
+can result when using POSIXlt instead of POSIXct objects. Hence, we make it POSIXct. See my
+[hselab post on using R for datetime group by analysis.](http://hselab.org/using-r-instead-of-excel-for-analyzing-recovery-room-data.html)
+
+```{r}
+train$month <- factor(month(train$datetime),ordered = TRUE)
+train$day <- factor(mday(train$datetime),ordered = TRUE)
+train$year <- factor(year(train$datetime),ordered = TRUE)
+train$dayofweek <- factor(wday(train$datetime),ordered = TRUE)
+train$hour <- factor(hour(train$datetime),ordered = TRUE)
+train$date <- as.POSIXct(trunc(train$datetime, "day"))
+```
+
+Now use `table` for some counts to check for missing rows.
+
+```{r}
+table(train$hour)
+table(train$day)
+table(train$day,train$hour)
+ddply(train,.(dayofweek),summarize,sum(count))
+```
+Looks like there are a pretty small number of missing hourly rows.
+
+Before we deal with this, let's do some date level analysis.
+
+### Counts by Date
+
+We'll use the `plyr` package. Let's start by creating a new dataframe that has stats by date (instead of by hour).
+
+```{r}
+riders_by_date <- ddply(train,.(date,season,holiday,workingday),summarize,
+                        numriders = sum(count),
+                        numcasual = sum(casual),
+                        numreg = sum(registered))
+
+riders_by_date$month <- month(riders_by_date$date)
+riders_by_date$day <- mday(riders_by_date$date)
+riders_by_date$year <- year(riders_by_date$date)
+riders_by_date$dayofweek <- wday(riders_by_date$date)
+```
+
+Easy now to check if all days of month appear the same number of times. If so,
+no missing dates.
+
+```{r}
+mdaycounts <- ddply(riders_by_date,.(day),summarize,nummdays = length(day))
+summary(mdaycounts$nummdays)
+```
+
+So, every day of month appears 24 times. No missing dates. However, we likely do have
+missing hours. What about numbers of weekdays?
+
+```{r}
+wdaycounts <- ddply(riders_by_date,.(dayofweek),summarize,numwdays = length(dayofweek))
+wdaycounts
+```
+
+Different number of weekdays. We have to make sure that we **take averages over dates** when grouping by day of week. 
+
+```{r}
+ggplot(data=ddply(riders_by_date,.(dayofweek),summarize,numriders=mean(numriders))) + aes(x=dayofweek,y=numriders) + geom_bar(stat="identity")
+```
+
+```{r}
+hourcounts <- ddply(train,.(date),summarize,numhours = length(count))
+summary(hourcounts$numhours)
+```
+
+
+### Filling in missing hourly rows
+
+This is a commonly needed task with time related data. Our basic strategy is:
+
+* Create a fully "seeded" dataframe at the hourly level.
+* Merge this new dataframe with our existing dataframe.
+* Fill in the missing data either by recoding or other imputation methods
+
+If (when) we find missing rows needing zero counts, then we also need to fill in the
+other columns. This is relatively easy for things like season, holiday, and workingday.
+However, then we have to decide what to do with the weather related columns. Likely, some
+sort of interpolation will make sense.
+
+#### Create a fully seeded table at the hour level
+
+The `ISOdate` function makes it easy to
+create dates much like the Excel DATE() function. Notice the timezone argument, `tz`. 
+For `tz=""` we get the current timezone. This will lead to trickiness related to daylight
+savings time. Let's specify EST.
+That 0 in the first call to ISOdate is necessary to make sure it starts at midnight. 
+
+
+
+```{r}
+seededhours <- seq(ISOdate(2011,1,1,0,tz="EST"), ISOdate(2012,12,19,23,tz="EST"), "hour")
+table(hour(seededhours))
+```
+
+Let's get rid of rows past the 19th of the month.
+
+```{r}
+seededhours <- seededhours[day(seededhours)<=19] # Filter out day > 19
+table(day(seededhours)) # Check the counts by day
+```
+
+Convert the seededhours list into a dataframe.
+
+```{r}
+df_seededhours <- as.data.frame(seededhours)
+names(df_seededhours)
+names(df_seededhours)[1] <- "datetime"
+```
+
+#### Merge
+
+Merge the two dataframes using a left outer join. The missing rows in
+train will have NA in the other columns. Here's a [good post on using merge to do inner, outer, left outer and right outer joins](http://stackoverflow.com/questions/1299871/how-to-join-data-frames-in-r-inner-outer-left-right)
+
+```{r}
+train <- merge(df_seededhours, train, by = "datetime",all.x = TRUE)
+```
+
+#### Fill in missing data
+
+For the time related convenience fields, let's just recompute them all.
+
+```{r}
+train$month <- factor(month(train$datetime),ordered = TRUE)
+train$day <- factor(mday(train$datetime),ordered = TRUE)
+train$year <- factor(year(train$datetime),ordered = TRUE)
+train$dayofweek <- factor(wday(train$datetime),ordered = TRUE)
+train$hour <- factor(hour(train$datetime),ordered = TRUE)
+train$date <- as.POSIXct(trunc(train$datetime, "day"))
+```
+
+For season, let's just recode the whole dataframe:
+
+```{r}
+train$season[train$month <= 3] <- 1
+train$season[train$month > 3 & train$month <= 6] <- 2
+train$season[train$month > 6 & train$month <= 9] <- 3
+train$season[train$month > 9] <- 4
+```
+
+For the rider counts, zero them out.
+
+```{r}
+train$casual[is.na(train$casual)] <- 0
+train$count[is.na(train$count)] <- 0
+train$registered[is.na(train$registered)] <- 0
+```
+
+For the holidays, let's create a master list of holidays and use that to update the NAs.
+
+```{r}
+holidays <- riders_by_date$date[riders_by_date$holiday==1]
+```
+
+
+```{r}
+train$datetime[is.na(train$holiday) & train$date %in% holidays]
+```
+
+```{r}
+train$holiday[is.na(train$holiday) & train$date %in% holidays] <- 1
+# Any remaining holidays that are NA should be set to 0
+train$holiday[is.na(train$holiday)] <- 0
+```
+
+what about the weather variables? It's just a small number of records but we really
+should do some sort of imputed values. We'll skip fo now.
+
+
+## Exploratory data analysis
+
+So, now we have fully filled out the dataframe and are ready for more analysis. Let's clean
+up the workspace by getting rid of some things we no longer need.
+
+```{r}
+rm(df_seededhours,seededhours)
+```
+
+### Analyis of overall rider volume
+
+
+Count riders by year, month. In this case, sums are fine since we have 19 days of data per month. However, in general,
+you should be cognizant of fact that often differences in monthly volumes of things can be attributed to the differing
+number of days per month and even the number of weekdays that happen to occur that month in a given year (hence, 
+comparisons to same month last year should be questioned).
+
+```{r}
+riders_by_ym <- ddply(train,.(year,month),summarize,
+                      total = sum(count),
+                      casual = sum(casual),
+                      registered = sum(registered),
+                      ridedate = max(date))
+
+riders_by_ym
+```
+
+Count riders by year, season
+
+```{r}
+riders_by_yseas <- ddply(train,.(year,season),summarize,
+                      total = sum(count),
+                      casual = sum(casual),
+                      registered = sum(registered),
+                      ridedate = max(date))
+
+riders_by_yseas
+```
+
+Let's do multiple line plots for casual, registered and total riders. First we'll do it
+with data in its current "wide" format and use multiple geom_line() calls. After that
+we'll do it via melting and a single geom_line() call. The melt approach is the "ggplotish""
+way to do it. Adding series labels in a legend when multiple geom_line() calls are used
+turned out to be surprising tricky. This [post from StackOverflow](http://stackoverflow.com/questions/10349206/add-legend-to-ggplot2-line-plot) was useful.
+
+Here's with no legend.
+
+```{r}
+ggplot() + 
+  geom_line(data = riders_by_ym, aes(x = as.Date(ridedate), y = total)) +
+  geom_line(data = riders_by_ym, aes(x = as.Date(ridedate), y = casual), colour="blue") +
+  geom_line(data = riders_by_ym, aes(x = as.Date(ridedate), y = registered), colour="red") +
+  xlab('Month') +
+  ylab('Num riders') + scale_x_date(labels = date_format("%m-%y"))
+```
+
+Here's with a legend - see the StackOverflow post mentioned above for the details.
+
+```{r}
+ggplot() + 
+  geom_line(data = riders_by_ym, aes(x = as.Date(ridedate), y = total, colour="Total")) +
+  geom_line(data = riders_by_ym, aes(x = as.Date(ridedate), y = casual, colour="Casual")) +
+  geom_line(data = riders_by_ym, aes(x = as.Date(ridedate), y = registered, colour="Registered")) +
+  scale_colour_manual("", 
+                      breaks = c("Total", "Registered", "Casual"),
+                      values = c("Total"="black", "Registered"="red", 
+                                 "Casual"="blue")) +
+  xlab('Month') +
+  ylab('Num riders') + scale_x_date(labels = date_format("%m-%y"))
+```
+
+Melt the data data to get it into "long" format. For this we use the `reshape2` package. 
+Notice how the number of rows increases -
+there is now one row per date and type of rider variable. And, there are new columns
+called RiderType and NumRiders.
+
+```{r}
+mlt_riders_by_ym <- melt(riders_by_ym,id.vars = c("year","month","ridedate"),
+                         value.name = "NumRiders",
+                         variable.name = "RiderType")
+```
+
+Now plot it using the RiderType column to control colour and series specification.
+
+```{r}
+plt_volume_ts <- ggplot() + 
+  geom_line(data = mlt_riders_by_ym, aes(x = as.Date(ridedate), y = NumRiders, 
+                                         colour = RiderType, group = RiderType)) +
+  xlab('Month') +
+  ylab('Num riders') + scale_x_date(labels = date_format("%m-%y"))
+
+plt_volume_ts
+```
+
+Now plot it using the Year column to control colour and series specification and just show overall ridership. This allows comparison across years of both overall volume and time of year patterns.
+
+```{r}
+plt_volume_stackedYears <- ggplot() + 
+  geom_line(data = riders_by_ym, aes(x=month, y=total, 
+                                         colour=year, group=year)) +
+  xlab('Month') +
+  ylab('Num riders')
+
+plt_volume_stackedYears
+```
+
+Let's add a linear trend line through the total riders.
+
+```{r}
+ggplot(data = riders_by_ym, aes(x = as.Date(ridedate), y = total)) + 
+  geom_line() +
+  geom_smooth(method = lm) +
+  xlab('Month') +
+  ylab('Num riders') + scale_x_date(labels = date_format("%m-%y"))
+```
+
+Is that trend statistically significant? Looks like it is.
+
+```{r}
+total_lm <- lm(data = riders_by_ym,total ~ ridedate)
+summary(total_lm)
+
+```
+
+
+### Day of week effects
+
+
+```{r}
+ddply(riders_by_date,.(dayofweek),summarize,mean(numriders))
+```
+
+```{r}
+ggplot(riders_by_date, aes(x = as.factor(dayofweek), y = numriders)) + geom_boxplot() + 
+  xlab('Day of Week') + 
+  ylab('# total riders') +
+  ggtitle('Total riders by day of week')
+```
+
+```{r}
+ggplot(riders_by_date, aes(x = as.factor(dayofweek), y = numcasual)) + geom_boxplot() + 
+  xlab('Day of Week') + 
+  ylab('# casual riders') +
+  ggtitle('Casual riders by day of week')
+```
+
+```{r}
+ggplot(riders_by_date, aes(x = as.factor(dayofweek), y = numreg)) + geom_boxplot() + 
+  xlab('Day of Week') + 
+  ylab('# registered riders') +
+  ggtitle('Registered riders by day of week')
+```
+
+
+
+Let's melt by date.
+
+```{r}
+mlt_riders_by_date <- melt(riders_by_date,measure.vars = c("numriders","numcasual","numreg"),
+                         id.vars = c("date","season","holiday","workingday","month","day","year","dayofweek"),
+                         value.name = "NumRiders",
+                         variable.name = "RiderType")
+```
+
+```{r}
+ggplot(mlt_riders_by_date, aes(x = as.factor(dayofweek), y = NumRiders)) + geom_boxplot() + facet_grid(~RiderType) +
+  xlab('Day of Week') + 
+  ylab('# riders') +
+  ggtitle('Riders by day of week')
+```
+
+From the previous plot you can see that casual riders are highest on Saturday but
+that registered riders provide the bulk of the ridership. Notice how Friday has
+the lowest ridership on weekdays by a good margin.
+
+### Holidays
+
+What is the average number of riders on holidays vs non-holidays
+
+```{r}
+ddply(riders_by_date,.(holiday),summarize,mean_riders_per_day=mean(numriders))
+```
+
+```{r}
+riders_by_holiday <- ddply(mlt_riders_by_date,.(holiday,RiderType),summarize,
+                      mean = mean(NumRiders),
+                      sd = sd(NumRiders),
+                      pct_05 = quantile(NumRiders,0.05),
+                      pct_95 = quantile(NumRiders,0.95))
+
+riders_by_holiday
+```
+
+So, on holidays, the average number of casual riders is higher than on non-holidays. Makes sense.
+
+```{r}
+ggplot(mlt_riders_by_date, aes(x = as.factor(holiday), y = NumRiders)) + geom_boxplot() + facet_grid(~RiderType) +
+  xlab('1=Holiday') + 
+  ylab('# total riders') +
+  ggtitle('Riders by holiday vs non-holiday')
+```
+
+```{r}
+ggplot(mlt_riders_by_date, aes(x = as.factor(season), y = NumRiders)) + geom_boxplot() + facet_grid(~RiderType) +
+  xlab('1=Jan-Mar, 2=Apr-Jun, 3=Jul-Sep, 4=Oct-Dec') + 
+  ylab('# total riders') +
+  ggtitle('Riders by season')
+```
+
+### Hour of day
+
+I want to see boxplots by hour of day. That let's us see both average and distribution of number
+of riders by time of day.
+
+```{r}
+ggplot(train, aes(x = as.factor(hour), y = count)) + geom_boxplot() + facet_grid(workingday~.) +
+  xlab('Hour of day') + 
+  ylab('# total riders') +
+  ggtitle('Riders by hour (1=working day)')
+```
+
+Now let's facet by day of week.
+
+```{r}
+ggplot(train, aes(x = as.factor(hour), y = count)) + geom_boxplot() + facet_grid(dayofweek~.) +
+  xlab('Hour of day') + 
+  ylab('# total riders') +
+  ggtitle('Riders by hour by day of week')
+```
+
+
+### Weather effects
+
+Again, box plots provide a concise summary. We can't simply sum up riders since we have widely
+different sample sizes for various weather conditions.
+
+```{r}
+ggplot(train, aes(x = weather, y = count)) + geom_boxplot()
+```
+Not surprisingly, better weather is associated with more riders. 
+
+Now let's do scatter plots for each of the weather variables. We'll make separate plots
+for casual and registered users.
+
+```{r}
+ggplot(train, aes(x = windspeed, y = casual)) + geom_point()
+ggplot(train, aes(x = windspeed, y = registered)) + geom_point()
+```
+
+```{r}
+ggplot(train, aes(x = temp, y = registered)) + geom_point()
+ggplot(train, aes(x = temp, y = casual)) + geom_point()
+```
+
+```{r}
+ggplot(train, aes(x = atemp, y = registered)) + geom_point()
+ggplot(train, aes(x = atemp, y = casual)) + geom_point()
+```
+
+```{r}
+ggplot(train, aes(x = humidity, y = registered)) + geom_point()
+ggplot(train, aes(x = humidity, y = casual)) + geom_point()
+```
+
+Let's bin the weather variables so that we can do averages by bin.
+
+```{r}
+train$humcat <- cut(train$humidity, breaks = 10)
+train$tempcat <- cut(train$temp, breaks = 15)
+train$atempcat <- cut(train$atemp, breaks = 15)
+train$windcat <- cut(train$windspeed, breaks = 15)
+```
+
+```{r}
+avg_vol_hum <- ddply(train,.(humcat),summarize,                      
+                      total = mean(count),
+                      casual = mean(casual),
+                      registered = mean(registered),
+                      n = length(datetime))
+
+avg_vol_wind <- ddply(train,.(windcat),summarize,                      
+                      total = mean(count),
+                      casual = mean(casual),
+                      registered = mean(registered),
+                      n = length(datetime))
+
+avg_vol_temp <- ddply(train,.(tempcat),summarize,                      
+                      total = mean(count),
+                      casual = mean(casual),
+                      registered = mean(registered),
+                      n = length(datetime))
+
+avg_vol_atemp <- ddply(train,.(atempcat),summarize,                      
+                      total = mean(count),
+                      casual = mean(casual),
+                      registered = mean(registered),
+                      n = length(datetime))
+```
+
+```{r}
+avg_vol_hum
+avg_vol_wind
+avg_vol_temp
+avg_vol_atemp
+```
+
+Create melted versions to facilitate stacked bar graphs of average rider volumes. For a few of the charts I included the
+sample size as a bar label. This reminds us that these averages are based on different sample sizes.
+
+```{r}
+mlt_avg_vol_atemp <- melt(avg_vol_atemp)
+mlt_avg_vol_temp <- melt(avg_vol_temp)
+mlt_avg_vol_hum <- melt(avg_vol_hum)
+mlt_avg_vol_wind <- melt(avg_vol_wind)
+```
+
+```{r}
+labels = mlt_avg_vol_atemp[mlt_avg_vol_atemp$variable == 'n',3]
+plt_avg_vol_atemp <- ggplot() + 
+  geom_bar(data = mlt_avg_vol_atemp[mlt_avg_vol_atemp$variable != 'n' & mlt_avg_vol_atemp$variable != 'total',], aes(x = atempcat, y = value,  colour = variable, group = variable), stat="identity") +
+  xlab('atemp bin') +
+  ylab('Mean Num riders') + theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+   geom_text(data=mlt_avg_vol_atemp[mlt_avg_vol_atemp$variable == 'total',],aes(x=atempcat,y=value,label=labels,vjust=-0.2))
+
+plt_avg_vol_atemp
+```
+
+```{r}
+plt_avg_vol_temp <- ggplot() + 
+  geom_bar(data = mlt_avg_vol_temp[mlt_avg_vol_temp$variable != 'n' & mlt_avg_vol_temp$variable != 'total',], aes(x = tempcat, y = value,  colour = variable, group = variable), stat="identity") +
+  xlab('temp bin') +
+  ylab('Mean Num riders') + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+plt_avg_vol_temp
+```
+
+```{r}
+plt_avg_vol_hum <- ggplot() + 
+  geom_bar(data = mlt_avg_vol_hum[mlt_avg_vol_hum$variable != 'n' & mlt_avg_vol_hum$variable != 'total',], aes(x = humcat, y = value,  colour = variable, group = variable), stat="identity") +
+  xlab('humidity bin') +
+  ylab('Mean Num riders') + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+plt_avg_vol_atemp
+```
+
+```{r}
+labels = mlt_avg_vol_wind[mlt_avg_vol_wind$variable == 'n',3]
+plt_avg_vol_wind <- ggplot() + 
+  geom_bar(data = mlt_avg_vol_wind[mlt_avg_vol_wind$variable != 'n' & mlt_avg_vol_wind$variable != 'total',], aes(x = windcat, y = value,  colour = variable, group = variable), stat="identity") +
+  xlab('windspeed bin') +
+  ylab('Mean Num riders') + theme(axis.text.x = element_text(angle = 90, hjust = 0)) +
+   geom_text(data=mlt_avg_vol_wind[mlt_avg_vol_wind$variable == 'total',],aes(x=windcat,y=value,label=labels,vjust=-0.2))
+
+plt_avg_vol_wind
+```
+## Linear models
+
+For fun, let's build a few quick multiple regression models to predict number of riders. Since we've
+see that casual and registered riders are quite different, we'll build models specific to a
+given population. Notice that we've included a mix of
+categorical and continuous variables. R automatically takes care of the conversion of categorical
+variables to sets of appropriate binary indicator variables.
+
+```{r}
+lm1 <- lm(registered ~ dayofweek + hour + year, data = train)
+summary(lm1)
+```
+
+```{r}
+lm2 <- lm(registered ~ dayofweek + hour + year + weather + season + atemp, data = train)
+summary(lm2)
+```
+
+```{r}
+lm3.reg <- lm(registered ~ dayofweek + hour + year + weather*season + temp*humidity*windspeed + atemp, data = train)
+summary(lm3.reg)
+```
+
+```{r}
+lm3.casual <- lm(casual ~ dayofweek + hour + year + weather*season + temp*humidity*windspeed + atemp, data = train)
+summary(lm3.casual)
+```
+
+Let's do a little residual analysis to check the basic regression assumptions. 
+
+### Normally distributed residuals?
+
+Each to check via a histogram.
+
+```{r}
+ggplot() + aes(x = resid(lm3.reg)) + geom_histogram(aes(y = ..density..),binwidth = 30)
+```
+
+### Constant variance?
+
+Plot residuals vs predicted values. The "fan out" pattern seen below suggests non-constant variance (heteroskedasticity).
+
+```{r}
+ggplot() + aes(x = predict(lm3.reg), y = resid(lm3.reg)) + geom_point()
+```
+
+Of course, the actual Kaggle prediction problem for this contest is much more complex than this. We have
+to do predictions over time, only using data from before each forecasting epoch. That's ok, our objective
+here was just to see how R can be used for data preparation and exploratory data analysis for an interesting
+dataset from a Kaggle competition.

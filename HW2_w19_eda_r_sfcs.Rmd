@@ -1,0 +1,378 @@
+---
+title: "HW2-EDA1 with R - stats and plots"
+author: "misken"
+date: "October 1, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Step 1 - Familiarize yourself with the data and the assignment
+
+In this assignment you'll do some exploratory data analysis
+with R on a dataset about airline flights out of Detroit Metropolitan
+Airport. The focus will be on basic statistics and basic plots. See the README.md file (it's just a plain text file with markdown in it) for details about the data file. 
+
+As we did in class, you'll be creating an R Markdown document to
+both prepare a dataset and do some analysis as well as to document the
+steps you did (and answer some questions I'll throw at you).
+
+You'll notice a few "Hacker Extra" tasks
+thrown in. These are for those of you who want to go a little above and beyond
+and attempt some more challenging tasks. And, feel free to do a some free form
+Hacker Extra style work yourself - in other words, do something beyond what
+was asked. You'll learn more.
+
+## Step 2 - R Markdown document
+
+You'll put your answers right into this document. Make sure 
+you have simply extracted the .tar.gz file for the assignment
+into the location of your choice. It contains a folder named
+/hw2_f18_eda_r.
+
+This will be your working directory. 
+
+## Step 3 - Set working directory and explore data folder
+
+Set the working directory. You'll notice that there is a folder named **data**.
+Inside of it you'll find the data file for this assignment - **flights_DTW_2017.csv**.
+
+
+## Step 4 - Complete the following R tasks and answer questions
+
+Now you'll need to complete the following tasks in R. Just like we did in class, you should
+use a combination of markdown text (be concise, no need to write tons of text) 
+to explain what you are doing and R code chunks to actually do it.
+When you are done, use the "Knit" button to generate an HTML file from your R Markdown.
+You'll be submitting BOTH the completed R Markdown file as well as the generated HTML file.
+
+Let's load a few libraries we'll need:
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+```
+
+
+### Problem 1 - Get the data into a dataframe
+
+You should read the data into a `data.frame` named `flights_out`.
+
+```{r read_flights}
+#flights_out <- read.csv(????)
+
+```
+
+Check the structure of the `data.frame`.
+
+```{r flights_structure}
+#???
+```
+
+### Problem 2 - Fix the FL_DATE field
+
+The FL_DATE field was interpeted as a factor. Convert it to
+a POSIXct date type. After doing this, use the `class` function to show that your
+change was successful and show the first 20 rows of the updated field.
+
+A few suggestions:
+
+- Don't try to change the field type in place until you know for sure your approach works. Do the conversion into a new field instead. Call this new
+field FL_DATE_2. After you've got it working, you can "remove" the FL_DATE_2
+column by subsetting the flights dataframe to grab all the rows and all the
+columns except FL_DATE_2.
+- help() is useful
+
+```{r fixFL_DATE}
+#flights_out$FL_DATE_2 <- ????
+#flights_out$FL_DATE <- flights$FL_DATE_2
+#flights_out <- flights[????]
+
+# Additional commands...
+
+```
+
+### Problem 3 - Basic summary stats
+
+Let's explore overall departure delays.
+
+Compute the following statistics for departure delay (DEP_DELAY).
+
+* mean, median, 5% trimmed mean
+* range, standard deviation, coefficient of variation
+* 5th, 25th, 50th, 75th and 95th quantiles
+
+```{r depdel_stats}
+# Bunch of commands ...
+
+```
+
+
+
+What fraction of flights are delayed by more than one hour?
+
+```{r}
+# Can be done with one line
+```
+
+A related measure to delay is called "tardiness". Tardiness is the
+max(0, DEP_DELAY). Create a new column called DEP_TARDINESS and
+then compute the mean tardiness. Compare to mean departure delay.
+
+```{r}
+#flights_out$DEP_TARDINESS <- ???
+#mean(flights_out$DEP_TARDINESS)
+```
+
+
+### Problem 4 - Basic plots for air time
+
+Create a histogram, boxplot, kernel density plot and violin plot for
+AIR_TIME.
+
+Histogram
+
+```{r gg_histo1}
+# ggplot(data = ???) + 
+#   ???
+```
+
+Kernel density plot
+```{r gg_density1}
+
+```
+
+Box plot
+```{r gg_box1}
+# ggplot(???) + 
+#   geom_boxplot(aes(x="AIR_TIME", y=???))
+```
+
+Violin plot
+```{r gg_violin1}
+
+```
+
+Now redo histograms and facet by carrier (OP_UNIQUE_CARRIER).
+
+```{r gg_histo_facet}
+
+```
+
+Write a short paragraph describing the distribution of AIR_TIME based
+on the plots you've created. What are some shortcomings of boxplots
+in this example?
+
+Here's something more challening:
+
+Also create a kernel density plot overlaid on a histogram. 
+Include vertical lines for the mean and median of air time. 
+Here's what I created.
+
+```{r}
+knitr::include_graphics("./histo_kdens.png")
+```
+
+
+### Problem 5 - Exploring departure delay
+
+Let's start by creating a histogram of departure delay and then a
+scatter plot of DEP_TIME on X axis and DEP_DELAY on Y axis. Any
+ideas on why the scatter plot looks like it does?
+
+```{r gg_histo1_depdelay}
+# ???
+```
+
+
+```{r gg_scatter1_depdelay}
+# ggplot(flights_out) + 
+#   geom_point(???)
+```
+
+
+### Problem 6 - Total number of flights out of DTW by destination
+
+Count the number of flights by destination airport (DEST). 
+
+Several ways you could do this.
+
+Use `table()`.
+
+```{r num_out}
+# table(???)
+```
+
+Use **dplyr** and sort descending by number of flights.
+
+```{r num_out_soln}
+# flights_out %>%
+#   ??? %>%
+#   summarise(???) %>% 
+#   ???)
+```
+
+
+
+### Problem 7 - Summary statistics for departure delay by carrier
+
+Use **dplyr** to compute the following statistics
+for departure delay grouped by carrier.
+
+* number of flights 
+* mean
+* 5th, 25th, 50th, 75th and 95th quantiles
+
+Sort the results in descending order by number of flights. Does carrier
+appear to impact departure delays?
+
+
+```{r stats_by_carrier}
+# ???
+```
+
+
+### Problem 8 - Boxplots for departure delay by carrier
+
+Use **ggplot2** to create a plot showing departure delay by carrier boxplots.
+Comment on the resulting plot. Then try to make improvements so that you can
+focus on the boxes better - outliers making this difficult in original plot.
+
+```{r bp_carrier}
+# ggplot(flights_out) +
+#   geom_boxplot(aes(x=???, y=???))
+```
+
+
+
+
+### Problem 9 - Engineer new features to facilitate time of day analysis
+
+Create a new field called CRS_DEP_HOUR based on CRS_DEP_TIME.
+Check it by displaying the first 10 rows and the CRS_DEP_HOUR and
+CRS_DEP_TIME fields.
+
+```{r crs_dep_hour}
+# flights_out$CRS_DEP_HOUR <- ??? 
+# flights_out[???, ???]
+
+```
+
+In addition, you decide that you'd like to create a "coarser" version 
+based on "departure period". Let's call it CRS_DEP_PRD. The values 
+of this new variable are as follows:
+
+1 if CRS_DEP_HOUR in [6,12]
+2 if CRS_DEP_HOUR in [13,18]
+3 if CRS_DEP_HOUR in [19,23]
+4 if CRS_DEP_HOUR in [0,5]
+
+See http://www.cookbook-r.com/Manipulating_data/Recoding_data/ for ideas. After
+creating the departure period field, makes sure you convert it to a factor if
+it's not already. Hint: 
+
+```{r crs_dep_prd}
+
+
+```
+
+
+
+Finally, create a field FL_DOW based on FL_DATE representing 
+the (integer) day of week of the flight. The **lubridate** package will be helpful.
+
+```{r fl_dow}
+
+
+```
+
+
+
+### Problem 10 - Do group by analysis on CRS_DEP_PRD
+
+Are departure delays related to departure period? Start by computing 
+basic summary statistics for DEP_DELAY by CRS_DEP_PRD. Of course you already know how to do this from previous questions in this assignment. 
+
+Use **dplyr**.
+
+```{r}
+# ddelay_period_summary <- flights_out %>% 
+#   group_by(???) %>% 
+#   summarise(
+#       num_flights=???,
+#       ???,
+#       ...
+#       ???)
+# 
+# head(ddelay_period_summary)
+# tail(ddelay_period_summary)
+```
+
+### Problem 11 - A scatterplot of DEP_DELAY by CRS_DEP_HOUR
+
+Create two versions, a standard scatter plot and one with "jitter". 
+
+Jitter is useful when you have many duplicate points that obscure each other.
+
+```{r}
+ggplot(flights_out) + geom_point(aes(x=CRS_DEP_HOUR,y=DEP_DELAY)) + ggtitle("No jitter")
+
+ggplot(flights_out) + ???) + ggtitle("With jitter")
+```
+
+### Problem 12 - Are departure delays related to day of week? What about by month of year?
+
+Use plots and/or group by analysis to take a first look at these questions.
+
+```{r delay_dow}
+
+
+```
+
+```{r delay_month}
+
+
+```
+
+### Problem 13 - Bar charts
+
+Create a basic bar chart based on number of flights by Carrier.
+
+```{r basic_bar}
+
+```
+
+Now create a similar plot but instead of the bars being based on
+counts, make it be the mean AIR_TIME. The key is
+to base your plot on the result of a group by operation using **dplyr**. Hint: You'll
+also want to learn about the `stat` layer in ggplots.
+
+This is a general strategy that is often useful for complex charts - create an intermediate dataframe that will make it "easy" to create the chart. Tools like **dplyr** (or **plyr** or **apply** family) are
+often a good choice for creating the intermediate dataframe.
+
+For an additional challenge, try to order the bars so longest bars first.
+
+```{r adv_bar}
+
+```
+
+
+
+### Hacker Extra - Number of flights by day of week
+
+Compute the average number of flights by day of week by carrier. Be careful. This is trickier than it seems.
+
+HINT: Let's start by computing flights by date by carrier.
+
+```{r}
+#??? ... bunch of commands
+```
+
+
+
+### Hacker Extra - Do some more analysis
+
+Try a few things on your own to learn more about flights out of DTW. :)

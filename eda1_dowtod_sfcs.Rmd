@@ -1,0 +1,582 @@
+---
+title: "EDA for SFCS"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(scales)
+library(tidyr)
+```
+
+## Load data
+
+In initial_exploration_sfcs.Rmd we did some data prep work and saved updated versions of the data.
+
+```{r load_data}
+load("sfcs_prepped.Rdata")
+```
+
+```{r}
+str(trip)
+```
+
+```{r}
+summary(trip)
+```
+
+
+## EDA of trip locations and types
+
+Some of these were also done in the initial_exploration_sfcs.Rmd file.
+
+### What are popular rental locations and trips?
+
+Popular start locations
+
+```{r count_starting}
+trip %>% 
+  group_by(start_station_name) %>% 
+  summarize(
+    num_trips = n()
+  ) %>% 
+  arrange(desc(num_trips))
+```
+
+Popular ending locations
+
+```{r count_ending}
+trip %>% 
+  group_by(end_station_name) %>% 
+  summarize(
+    num_trips = n()
+  ) %>% 
+  arrange(desc(num_trips))
+```
+
+Popular trips
+
+```{r count_trips}
+trip %>% 
+  group_by(start_station_id, end_station_id) %>% 
+  summarize(
+    num_trips = n()
+  ) %>% 
+  arrange(desc(num_trips))
+```
+
+Popular round trips
+
+```{r count_roundtrips}
+trip %>% 
+  filter(round_trip) %>% 
+  group_by(start_station_name) %>% 
+  summarize(
+    num_trips = n()
+  ) %>% 
+  arrange(desc(num_trips))
+```
+
+### What percent of trips are round trips?
+
+Let's use table.
+
+```{r table_roundtrip}
+table(trip$round_trip)
+```
+
+```{r proptable_roundtrip}
+prop.table(x = table(trip$round_trip))
+```
+
+Try to do it with dplyr.
+
+The dplyr `tally` command looks like the trick.
+
+https://dplyr.tidyverse.org/reference/tally.html
+
+```{r tally_roundtrip}
+trip %>% 
+  group_by(round_trip) %>% 
+  tally()
+```
+
+```{r pcttally_roundtrip}
+trip %>% 
+  group_by(round_trip) %>% 
+  tally() %>% 
+  mutate(pct = n / sum(n))
+```
+
+Let's try with multiple grouping fields. Will the percentages be within groups?
+
+```{r pcttally2}
+trip %>% 
+  group_by(start_city, round_trip) %>% 
+  tally() %>% 
+  mutate(pct = n / sum(n))
+```
+
+```{r}
+trip %>% 
+  group_by(start_city, round_trip) %>% 
+  tally()
+```
+
+Repeated use of `tally` progressively aggregates up the groupling fields.
+
+```{r tally_repeat}
+trip %>% 
+  group_by(start_city, round_trip) %>% 
+  tally() %>% 
+  tally()
+```
+
+To get individual cell frequencies, need to divide by total number of rows in `trip` dataframe.
+
+```{r cellfreq}
+trip %>% 
+  group_by(start_city, round_trip) %>% 
+  tally() %>% 
+  mutate(pct = n / nrow(trip))
+```
+
+Let's do city to city counts.
+
+```{r count_citypairs}
+table(trip$start_city, trip$end_city)
+```
+
+Obviously, the vast majority of trips are within San Francisco.
+
+What exactly is the `table()` function returning.
+
+```{r}
+class(table(trip$start_city, trip$end_city))
+```
+
+According to the doc page at https://www.rdocumentation.org/packages/base/versions/3.5.2/topics/table, a
+`table` is essentially an array of integers.
+
+```{r proptable_citypairs}
+prop.table(table(trip$start_city, trip$end_city))
+```
+
+### What is proporation of subscribers?
+
+```{r pct_subscription}
+trip %>% 
+  group_by(subscription_type) %>% 
+  count() %>% 
+  mutate(pct = n / nrow(trip))
+```
+
+```{r pct_subscription_roundtrip}
+trip %>% 
+  group_by(subscription_type, round_trip) %>% 
+  tally() %>% 
+  mutate(pct = n / sum(n))
+```
+
+## Trends in cycle share use
+
+Let's get number of riders by year and month and subscription type.
+
+```{r}
+trip %>% 
+  group_by(start_year, start_month, subscription_type) %>% 
+  count()
+```
+
+
+```{r numriders_ym_sub}
+num_riders_ym_sub <- trip %>% 
+  group_by(trip_ym, subscription_type) %>% 
+  count()
+```
+
+```{r volplot_1}
+ggplot() + 
+  geom_line(data = num_riders_ym_sub, aes(x = trip_ym, y = n, 
+                                         colour = subscription_type, group = subscription_type)) +
+  xlab('Month') +
+  ylab('Num riders')
+
+```
+
+```{r volplot_2}
+plt_volume_ts <- ggplot() + 
+  geom_line(data = num_riders_ym_sub, aes(x = as.Date(trip_ym), y = n, 
+                                         colour = subscription_type, group = subscription_type)) +
+  xlab('Month') +
+  ylab('Num riders') + scale_x_date(labels = date_format("%m-%y"))
+
+plt_volume_ts
+```
+
+Total riders.
+
+```{r}
+num_riders_ym <- trip %>% 
+  group_by(trip_ym) %>% 
+  count()
+```
+
+```{r volplot_3}
+ggplot() + 
+  geom_line(data = num_riders_ym, aes(x = trip_ym, y = n)) +
+  xlab('Month') +
+  ylab('Num riders')
+
+```
+
+## Day of week analysis
+
+Let's ignore the "start up" period and focus on January 2014 - August 2015.
+
+To compute rider volume statistics by day of week, we need to make sure that there are no dates
+with zero riders. Pretty unlikely with the full dataset but could easily happen at the station level.
+
+Let's start with overall average number of riders by day of week.
+
+```{r trips_bydate}
+startdate <- ymd("2014-01-01")
+enddate <- ymd("2015-08-31")
+
+tot_trips_bydate <- trip %>% 
+  filter(between(trip_date, startdate, enddate)) %>% 
+  group_by(trip_date) %>% 
+  count()
+
+tot_trips_bydate$dow <- wday(tot_trips_bydate$trip_date)
+tot_trips_bydate$dow <- as.factor(tot_trips_bydate$dow)
+levels(tot_trips_bydate$dow) <- c("Su", "Mo", "Tu", "We", "Th", "Fr", "Sa")
+
+tot_trips_bydate
+```
+
+What is easy way to check if any missing dates?
+
+Method 1: Check if number of rows in tot_trips_bydate is same as number of days in date range
+
+```{r missingdates1}
+num_days_in_daterange <- as.numeric(enddate - startdate) + 1
+num_days_in_query <- nrow(tot_trips_bydate)
+print(num_days_in_query)
+num_days_in_daterange == num_days_in_query
+```
+
+Method 2: Check if lag between any two rows is > 1
+
+We can use the `diff()` function to compute a time lag 1 difference and make sure max of the result is 1.
+
+```{r missingdates2}
+max(diff(tot_trips_bydate$trip_date, lag=1))
+```
+
+Great. We can safely do averages by day of week.
+
+```{r tot_trips_bydate}
+stats_trips_bydate <- tot_trips_bydate %>% 
+  group_by(dow) %>% 
+  summarize(
+    num_trips_mean = mean(n),
+    num_trips_sd = sd(n),
+    num_trips_min = min(n),
+    num_trips_max = max(n),
+    num_trips_p05 = quantile(n, 0.05),
+    num_trips_p25 = quantile(n, 0.25),
+    num_trips_p50 = quantile(n, 0.5),
+    num_trips_p75 = quantile(n, 0.75),
+    num_trips_p95 = quantile(n, 0.95)
+  )
+
+
+stats_trips_bydate
+```
+
+```{r}
+ggplot(stats_trips_bydate) + geom_bar(aes(x = dow, y = num_trips_mean), stat = "identity") +
+  xlab("Day of week") + ylab("Mean number of rentals per day")
+```
+
+Now, let's compute the same stats by subscription type.
+
+```{r}
+tot_trips_bydate_sub <- trip %>% 
+  filter(between(trip_date, startdate, enddate)) %>% 
+  group_by(trip_date, subscription_type) %>% 
+  count()
+
+tot_trips_bydate_sub$dow <- wday(tot_trips_bydate_sub$trip_date)
+tot_trips_bydate_sub$dow <- as.factor(tot_trips_bydate_sub$dow)
+levels(tot_trips_bydate_sub$dow) <- c("Su", "Mo", "Tu", "We", "Th", "Fr", "Sa")
+tot_trips_bydate_sub
+```
+
+From the total number of rows, we can see that no dates are skipped.
+
+```{r}
+tot_trips_bydate_sub %>% 
+  group_by(subscription_type) %>% 
+  count()
+```
+
+```{r}
+stats_trips_bydate_sub <- tot_trips_bydate_sub %>% 
+  group_by(subscription_type, dow) %>% 
+  summarize(
+    num_weeks = n(),
+    num_trips_mean = mean(n),
+    num_trips_sd = sd(n),
+    num_trips_min = min(n),
+    num_trips_max = max(n),
+    num_trips_p05 = quantile(n, 0.05),
+    num_trips_p25 = quantile(n, 0.25),
+    num_trips_p50 = quantile(n, 0.5),
+    num_trips_p75 = quantile(n, 0.75),
+    num_trips_p95 = quantile(n, 0.95)
+
+  )
+
+```
+
+```{r}
+ggplot(stats_trips_bydate_sub) + 
+  geom_bar(aes(x = dow, y = num_trips_mean, fill = subscription_type), stat = "identity") +
+  xlab("Day of week") + ylab("Mean number of rentals per day")
+```
+
+
+```{r boxplot1, fig.width = 12, fig.height=10}
+ggplot(tot_trips_bydate_sub) + 
+  geom_boxplot(aes(x = dow, y = n, colour=subscription_type)) + facet_grid(. ~ subscription_type) +
+  xlab("Day of week") + ylab("Number of rentals per day")
+```
+
+Now, let's compute the same stats by start station type.
+
+```{r}
+tot_trips_bydate_station <- trip %>% 
+  filter(between(trip_date, startdate, enddate)) %>% 
+  group_by(trip_date, start_station_id) %>% 
+  count()
+
+tot_trips_bydate_station$dow <- wday(tot_trips_bydate_station$trip_date)
+tot_trips_bydate_station$dow <- as.factor(tot_trips_bydate_station$dow)
+levels(tot_trips_bydate_station$dow) <- c("Su", "Mo", "Tu", "We", "Th", "Fr", "Sa")
+tot_trips_bydate_station
+```
+
+Any skipped dates?
+
+```{r}
+tot_trips_bydate_station %>% 
+  group_by(start_station_id) %>% 
+  count()
+```
+
+Yep, tons of dates for which no bikes rented at some stations. The result is that the following statistics are going to be overstated for many station and day of week pairs. 
+
+```{r}
+stats_bydate_station_1 <- tot_trips_bydate_station %>% 
+  group_by(start_station_id, dow) %>% 
+  summarize(
+    num_weeks = n(),
+    num_trips_mean = mean(n),
+    num_trips_sd = sd(n),
+    num_trips_min = min(n),
+    num_trips_max = max(n),
+    num_trips_p05 = quantile(n, 0.05),
+    num_trips_p25 = quantile(n, 0.25),
+    num_trips_p50 = quantile(n, 0.5),
+    num_trips_p75 = quantile(n, 0.75),
+    num_trips_p95 = quantile(n, 0.95)
+
+  ) %>% 
+  arrange(start_station_id, dow)
+
+stats_bydate_station_1
+```
+
+What we need is an expanded version of `tot_trips_bydate_station` which contains the rows corresponding to
+all date and station pairs with zero rides.  R has a useful function, `expand.grid`, that helps make this process relatively easy. We create what I call a *fully seeded* table.
+
+```{r}
+dates <- seq(startdate, enddate, by='days')
+stations <- unique(trip$start_station_id)
+date_stations <- expand.grid(stations, dates)
+names(date_stations) <- c("start_station_id", "trip_date")
+
+# Get sorted by station and date
+date_stations <- date_stations %>% 
+  arrange(start_station_id, trip_date)
+```
+
+Join the fully seeded table, `date_stations`, to `tot_trips_bydate_station`. Rows in `date_stations` that
+aren't in `tot_trips_bydate_station` will have an NA value in the resulting joined table.
+
+```{r}
+tot_trips_bydate_station <- date_stations %>% 
+  left_join(tot_trips_bydate_station, by = c("start_station_id", "trip_date"))
+
+tot_trips_bydate_station
+```
+
+Replace the NAs with 0's.
+
+```{r}
+tot_trips_bydate_station$n <- tot_trips_bydate_station$n %>% replace_na(0)
+tot_trips_bydate_station
+```
+
+```{r}
+stats_bydate_station <- tot_trips_bydate_station %>% 
+  group_by(start_station_id, dow) %>% 
+  summarize(
+    num_weeks = n(),
+    num_trips_mean = mean(n),
+    num_trips_sd = sd(n),
+    num_trips_min = min(n),
+    num_trips_max = max(n),
+    num_trips_p05 = quantile(n, 0.05),
+    num_trips_p25 = quantile(n, 0.25),
+    num_trips_p50 = quantile(n, 0.5),
+    num_trips_p75 = quantile(n, 0.75),
+    num_trips_p95 = quantile(n, 0.95)
+
+  )
+
+
+stats_bydate_station
+```
+
+How different are the means in `stats_bydate_station` and `stats_bydate_station_1` (the overestimates)?
+
+```{r}
+ggplot(data.frame(unbiased_mean = stats_bydate_station$num_trips_mean,
+                  biased_mean = stats_bydate_station_1$num_trips_mean)) +
+  geom_point(aes(x = unbiased_mean, y = biased_mean))
+```
+
+```{r}
+ggplot(data.frame(unbiased_mean = stats_bydate_station$num_trips_mean,
+                  biased_mean = stats_bydate_station_1$num_trips_mean)) +
+  geom_point(aes(x = unbiased_mean, y = biased_mean)) +
+  geom_abline() +
+  xlim(0, 25) + ylim(0, 25)
+```
+
+## Time of day and day of week
+
+
+```{r}
+tot_trips_bydatehour_sub <- trip %>% 
+  filter(between(trip_date, startdate, enddate)) %>% 
+  group_by(trip_date, start_hour, sub_type = subscription_type) %>% 
+  count()
+
+
+tot_trips_bydatehour_sub
+```
+
+```{r}
+dates <- seq(startdate, enddate, by='days')
+hours <- 0:23
+subtypes <- unique(trip$subscription_type)
+date_hour_sub <- expand.grid(subtypes, dates, hours)
+names(date_hour_sub) <- c("sub_type", "trip_date", "start_hour")
+
+# Get sorted by station and date
+date_hour_sub <- date_hour_sub %>% 
+  arrange(sub_type, trip_date, start_hour)
+
+# Join the fully seeded table, `date_hour_sub`, to `tot_trips_bydatehour_sub`. 
+
+tot_trips_bydatehour_sub <- date_hour_sub %>% 
+  left_join(tot_trips_bydatehour_sub, by = c("sub_type", "trip_date", "start_hour"))
+
+# Replace the NAs with 0's.
+tot_trips_bydatehour_sub$n <- tot_trips_bydatehour_sub$n %>% replace_na(0)
+print(tot_trips_bydatehour_sub)
+
+tot_trips_bydatehour_sub$dow <- wday(tot_trips_bydatehour_sub$trip_date)
+tot_trips_bydatehour_sub$dow <- as.factor(tot_trips_bydatehour_sub$dow)
+levels(tot_trips_bydatehour_sub$dow) <- c("Su", "Mo", "Tu", "We", "Th", "Fr", "Sa")
+
+tot_trips_bydatehour_sub$weekday <- wday(tot_trips_bydatehour_sub$trip_date) %in% 2:6
+tot_trips_bydatehour_sub$weekday <- as.factor(tot_trips_bydatehour_sub$weekday)
+levels(tot_trips_bydatehour_sub$weekday) <- c("Weekend", "Weekday")
+
+# Compute summary stats by dow, hour, sub
+statsby_dow_hour_sub <- tot_trips_bydatehour_sub %>% 
+  group_by(sub_type, dow, start_hour) %>% 
+  summarize(
+    num_weeks = n(),
+    num_trips_mean = mean(n),
+    num_trips_sd = sd(n),
+    num_trips_min = min(n),
+    num_trips_max = max(n),
+    num_trips_p05 = quantile(n, 0.05),
+    num_trips_p25 = quantile(n, 0.25),
+    num_trips_p50 = quantile(n, 0.5),
+    num_trips_p75 = quantile(n, 0.75),
+    num_trips_p95 = quantile(n, 0.95)
+
+  )
+
+statsby_dow_hour_sub
+
+# Compute summary stats by weekday, hour, sub
+statsby_weekday_hour_sub <- tot_trips_bydatehour_sub %>% 
+  group_by(sub_type,  weekday, start_hour) %>% 
+  summarize(
+    num_weeks = n(),
+    num_trips_mean = mean(n),
+    num_trips_sd = sd(n),
+    num_trips_min = min(n),
+    num_trips_max = max(n),
+    num_trips_p05 = quantile(n, 0.05),
+    num_trips_p25 = quantile(n, 0.25),
+    num_trips_p50 = quantile(n, 0.5),
+    num_trips_p75 = quantile(n, 0.75),
+    num_trips_p95 = quantile(n, 0.95)
+
+  )
+
+
+statsby_weekday_hour_sub
+```
+
+
+```{r todplot1, fig.width = 12, fig.height=10}
+ggplot(stats_bydatehour_sub) + 
+  geom_bar(aes(x = start_hour, y = num_trips_mean, fill = sub_type), stat = "identity") +
+  facet_grid(dow ~ .) +
+  xlab("Hour of day") + ylab("Mean number of rentals per hour")
+```
+
+```{r boxplot_dow1, fig.width = 12, fig.height=10}
+tot_trips_bydatehour_sub %>% 
+  group_by(trip_date, weekday, start_hour) %>% 
+  summarise(
+    ntot = sum(n)
+  ) %>% 
+
+ggplot() + 
+  geom_boxplot(aes(x = as.factor(start_hour), y = ntot, colour = weekday)) + facet_grid(weekday ~ .) +
+  xlab("Hour of day") + ylab("Mean number of rentals per hour")
+```
+
+```{r todplot2, fig.width = 12, fig.height=10}
+ggplot(statsby_weekday_hour_sub) + 
+  geom_bar(aes(x = start_hour, y = num_trips_mean, fill = sub_type), stat = "identity") +
+  facet_grid(weekday ~ .) +
+  xlab("Hour of day") + ylab("Mean number of rentals per hour")
+```

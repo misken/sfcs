@@ -1,0 +1,104 @@
+---
+title: "EDA for SFCS"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(scales)
+library(tidyr)
+```
+
+## Load data
+
+In initial_exploration_sfcs.Rmd we did some data prep work and saved updated versions of the data.
+
+```{r load_data}
+load("sfcs_prepped.Rdata")
+```
+
+```{r}
+str(trip)
+```
+
+```{r}
+summary(trip)
+```
+
+
+## EDA of trip duration
+
+Some of these were also done in the initial_exploration_sfcs.Rmd file.
+
+```{r}
+summary(trip$duration)
+```
+
+```{r}
+print(quantile(trip$duration, 0.98))
+print(quantile(trip$duration, 0.99))
+print(quantile(trip$duration, 0.999))
+```
+
+```{r}
+mean(trip$duration < 7200)
+```
+
+```{r fig.width = 8, fig.height = 6}
+trip %>% 
+  filter(duration < 7200) %>% 
+  ggplot() + geom_histogram(aes(x = duration), binwidth = 60) +
+  coord_cartesian(xlim = c(0, 7500))
+```
+
+
+
+```{r}
+trip %>% 
+  filter(duration < 7200) %>%
+  ggplot(aes(duration)) + stat_ecdf(geom = "step")
+```
+
+
+```{r fig.width = 8, fig.height = 6}
+trip %>% 
+  filter(duration < 86400) %>% 
+  ggplot() + geom_boxplot(aes(x = subscription_type, y = duration)) +
+  coord_cartesian(ylim = c(0, 7500))
+```
+
+Vast majority of trips are subscribers.
+
+```{r fig.width = 8, fig.height = 6}
+trip %>% 
+  filter(duration < 86400, subscription_type == "Subscriber") %>% 
+  ggplot() + geom_boxplot(aes(x = round_trip, y = duration)) +
+  coord_cartesian(ylim = c(0, 25000))
+```
+
+
+
+```{r boxplot_dow1, fig.width = 12, fig.height=10}
+tot_trips_bydatehour_sub %>% 
+  group_by(trip_date, weekday, start_hour) %>% 
+  summarise(
+    ntot = sum(n)
+  ) %>% 
+
+ggplot() + 
+  geom_boxplot(aes(x = as.factor(start_hour), y = ntot, colour = weekday)) + facet_grid(weekday ~ .) +
+  xlab("Hour of day") + ylab("Mean number of rentals per hour")
+```
+
+```{r todplot2, fig.width = 12, fig.height=10}
+ggplot(statsby_weekday_hour_sub) + 
+  geom_bar(aes(x = start_hour, y = num_trips_mean, fill = sub_type), stat = "identity") +
+  facet_grid(weekday ~ .) +
+  xlab("Hour of day") + ylab("Mean number of rentals per hour")
+```

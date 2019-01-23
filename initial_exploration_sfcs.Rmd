@@ -1,0 +1,475 @@
+---
+title: "Initial exploration of SF Cycle Share data"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(tidyr)
+```
+
+## Introduction
+
+Dataset source: https://www.kaggle.com/benhamner/sf-bay-area-bike-share/version/1
+
+I haven't really analyzed San Francisco Cycle Share data yet. It should make for a good blog post or two (or Kaggle kernel) as well as an EDA assignment in R for pcda class. There are several files:
+
+- station.csv - one row per station. Includes lat/lon, city, dock count and install date
+- status.csv - like a hillmaker bydate table at the minute level by station with bikes available and docks available
+- trip.csv - one row per trip with standard fields. Includes a zip code that is user entered (according to answer in Discussion forum)
+- weather.csv - one row per date per zip code with min, mean, and max of several weather related variables. In Discussion forum, I found this about the zip code:
+
+    Also, FYI: There are five cities that the BABS program operates in including the following:
+
+    city <- c ("San Francisco", "Redwood City", "Palo Alto", "Mountain View", "San Jose")
+    
+    These should correspond with…
+    
+    zip_code
+    [1] 94107 94063 94301 94041 95113
+
+In addition there's a SQLite database containing the same four data tables. 
+
+**TODO** - check if DB Browser for SQLite is installed on pcda vm.
+
+
+## Read in and first look at the data tables
+
+### The station table
+
+I'm going to read station.csv in a few different ways.
+
+```{r read_station}
+# Base with defaults (stringsAsFactors = TRUE)
+station0 <- read.csv("~/Documents/projects/sf_cycle_share/data/raw/station.csv")
+
+# readr with defaults
+station1_readr <- read_csv("data/raw/station.csv")
+
+# readr and fix a few column types
+station2_readr <- read_csv("data/raw/station.csv",
+    col_types = cols(dock_count = col_integer(),
+                     installation_date = col_date(format = "%m/%d/%Y")))
+
+```
+
+Using base, the station name and city are treated as factors (correctly) but the date is also
+treated as a factor (since R guessed it was a string) and we want it to be a date.
+
+```{r}
+str(station0)
+```
+
+Can we convert installation_date to a POSIXct value even though it's a factor?
+
+```{r}
+station0$installation_date <- as.POSIXct(station0$installation_date, format = "%m/%d/%Y")
+str(station0)
+```
+
+Yep, that works.
+
+With readr and using defaults, it's like using base with `stringsAsFactors = FALSE`.
+
+```{r}
+str(station1_readr)
+```
+
+With readr and fixing some data types, we can get what we want.
+
+```{r}
+str(station2_readr)
+```
+
+We'll use `station2_readr` and get rid of the others.
+
+```{r}
+station <- station2_readr
+rm(station0, station1_readr, station2_readr)
+```
+
+```{r}
+summary(station)
+```
+
+Should we convert `name` and `city` to factors? The `name` column will be in the `trip` table and
+we'll want to use join type operations to get station level information (e.g. the lat/lon). I guess
+I never thought carefully about this and was just trusting base R `merge` and `dplyr` to coerce
+factors to strings if needed (e.g. the levels in the two tables don't match perfectly). Some
+good posts on this are:
+
+- https://rpubs.com/hadley/45044
+- https://stackoverflow.com/questions/23802571/safely-merge-data-frames-by-factor-columns
+- https://stackoverflow.com/questions/30468412/dplyr-join-warning-joining-factors-with-different-levels
+
+For dplyr, coercion to strings is done if needed and a warning raised.
+
+### Trip table
+
+This is the primary table we'll use for analysis.
+
+```{r readtrip}
+trip <- read_csv("data/raw/trip.csv")
+str(trip)
+summary(trip)
+```
+
+Let's confirm we didn't lose any rows with those parsing errors.
+
+```{bash}
+wc -l data/raw/trip.csv
+```
+
+```{r}
+head(trip)
+```
+
+Convert start and end dates to dates.
+
+```{r}
+trip$start_date <- as.POSIXct(trip$start_date, format="%m/%d/%Y %H:%M")
+trip$end_date <- as.POSIXct(trip$end_date, format="%m/%d/%Y %H:%M")
+str(trip)
+```
+
+```{r}
+head(trip)
+```
+
+### Weather data
+
+```{r readweather}
+weather <- read_csv("data/raw/weather.csv")
+str(weather)
+summary(weather)
+```
+
+Fix up data types for `date` and `precipitation_inches`.
+
+```{r}
+weather$date <- as.POSIXct(weather$date, format="%m/%d/%Y")
+weather$precipitation_inches <- as.numeric(weather$precipitation_inches)
+```
+
+```{r}
+summary(weather)
+```
+
+## Preliminary exploration of trip data
+
+```{r}
+summary(trip)
+```
+
+Hmm, that max duration looks a little suspect.
+
+```{r}
+trip %>% 
+  arrange(desc(duration))
+```
+
+
+For now, let's leave all the records intact.
+
+
+Let's convert some of the fields to factors.
+
+```{r}
+trip$subscription_type <- as.factor(trip$subscription_type)
+trip$zip_code <- as.factor(trip$zip_code)
+```
+
+Use `table` function to get trip counts by factor levels.
+
+```{r}
+table(trip$subscription_type)
+```
+
+```{r}
+table(trip$start_station_name)
+```
+
+```{r}
+head(trip)
+```
+
+## Feature engineering
+
+For analytical convenience, let's create some new fields in the `trip` dataframe.
+
+### Date parts
+
+Use the `start_date` as a basis.
+
+```{r}
+trip %>% 
+  mutate(trip_date = date(start_date),
+         start_year = year(start_date),
+         start_month = month(start_date),
+         start_hour = hour(start_date),
+         start_dow = wday(start_date)) %>% 
+  select(starts_with("start_")) %>% 
+  head(15)
+```
+
+Create the new fields.
+
+```{r}
+trip <- trip %>% 
+  mutate(trip_date = date(start_date),
+         start_year = year(start_date),
+         start_month = month(start_date),
+         start_hour = hour(start_date),
+         start_dow = wday(start_date),
+         trip_ym = floor_date(start_date, "month"))
+```
+
+```{r}
+trip$start_weekday <- trip$start_dow %in% 2:6
+trip$start_dow <- as.factor(trip$start_dow)
+levels(trip$start_dow) <- c("Su", "Mo", "Tu", "We", "Th", "Fr", "Sa")
+
+
+trip$start_weekday <- as.factor(trip$start_weekday)
+levels(trip$start_weekday) <- c("Weekend", "Weekday")
+```
+
+
+### Trip type
+
+If start and end points are the same, it's a "round trip".
+
+```{r}
+trip %>% 
+  mutate(round_trip = (start_station_id == end_station_id)) %>% 
+  select(start_station_id, end_station_id, round_trip) %>% 
+  head(15)
+```
+
+```{r}
+trip <- trip %>% 
+  mutate(round_trip = (start_station_id == end_station_id))
+```
+
+### Trip geography
+
+Let's pull in the start and end cities (based on zip code in the `station` dataframe).
+
+```{r}
+trip %>% 
+  left_join(station, by = c("start_station_id" = "id")) %>% 
+  select(contains("id"), city)
+```
+
+
+```{r}
+trip %>% 
+  left_join(station, by = c("start_station_id" = "id")) %>%
+  mutate(start_city = city) %>% 
+  select(contains("id"), contains("city"))
+```
+
+Let's create a few more fields based on the starting location and on ending location.
+
+```{r}
+trip <- trip %>% 
+  left_join(station, by = c("start_station_id" = "id")) %>%
+  mutate(start_city = city,
+         start_lat = lat,
+         start_long = long) %>% 
+  select(-c(city, name, lat, long, dock_count, installation_date))
+
+```
+
+```{r}
+trip <- trip %>% 
+  left_join(station, by = c("end_station_id" = "id")) %>%
+  mutate(end_city = city,
+         end_lat = lat,
+         end_long = long) %>% 
+  select(-c(city, name, lat, long, dock_count, installation_date))
+
+```
+
+Let's save the dataframes.
+
+```{r}
+save(trip, station, weather, file="sfcs_prepped.Rdata")
+```
+
+## EDA of trips
+
+I'll mostly use dplyr but will thrown in some apply type functions for practice.
+
+### What are popular rental locations and trips?
+
+Popular start locations
+
+```{r}
+trip %>% 
+  group_by(start_station_name) %>% 
+  summarize(
+    num_trips = n()
+  )
+```
+
+
+
+```{r count_starting}
+trip %>% 
+  group_by(start_station_name) %>% 
+  summarize(
+    num_trips = n()
+  ) %>% 
+  arrange(desc(num_trips))
+```
+
+Popular ending locations
+
+```{r count_ending}
+trip %>% 
+  group_by(end_station_name) %>% 
+  summarize(
+    num_trips = n()
+  ) %>% 
+  arrange(desc(num_trips))
+```
+
+Popular trips
+
+```{r count_trips}
+trip %>% 
+  group_by(start_station_id, end_station_id) %>% 
+  summarize(
+    num_trips = n()
+  ) %>% 
+  arrange(desc(num_trips))
+```
+
+Popular round trips
+
+```{r count_roundtrips}
+trip %>% 
+  filter(round_trip) %>% 
+  group_by(start_station_name) %>% 
+  summarize(
+    num_trips = n()
+  ) %>% 
+  arrange(desc(num_trips))
+```
+
+### What percent of trips are round trips?
+
+Let's use ta
+```{r}
+table(trip$round_trip)
+```
+
+```{r}
+prop.table(x = table(trip$round_trip))
+```
+
+Try to do it with dplyr.
+
+
+
+This feels like it should work but doesn't.
+```{r}
+trip %>% 
+  group_by(round_trip) %>% 
+  summarize(
+    pct = n() / sum(n())
+  )
+```
+
+The dplyr `tally` command looks like the trick.
+
+https://dplyr.tidyverse.org/reference/tally.html
+
+```{r}
+trip %>% 
+  group_by(round_trip) %>% 
+  tally()
+```
+
+```{r}
+trip %>% 
+  group_by(round_trip) %>% 
+  tally() %>% 
+  mutate(pct = n / sum(n))
+```
+
+Let's try with multiple grouping fields. Will the percentages be within groups?
+
+```{r}
+trip %>% 
+  group_by(start_city, round_trip) %>% 
+  tally() %>% 
+  mutate(pct = n / sum(n))
+```
+
+```{r}
+trip %>% 
+  group_by(start_city, round_trip) %>% 
+  tally()
+```
+
+```{r}
+trip %>% 
+  group_by(start_city, round_trip) %>% 
+  tally() %>% 
+  tally()
+```
+
+To get individual cell frequencies, need to divide by total number of rows in `trip` dataframe.
+
+```{r cellfreq}
+trip %>% 
+  group_by(start_city, round_trip) %>% 
+  tally() %>% 
+  mutate(pct = n / nrow(trip))
+```
+
+Let's do city to city counts.
+
+```{r}
+table(trip$start_city, trip$end_city)
+```
+
+Obviously, the vast majority of trips are within San Francisco.
+
+What exactly is the `table()` function returning.
+
+```{r}
+class(table(trip$start_city, trip$end_city))
+```
+
+According to the doc page at https://www.rdocumentation.org/packages/base/versions/3.5.2/topics/table, a
+`table` is essentially an array of integers.
+
+```{r}
+prop.table(table(trip$start_city, trip$end_city))
+```
+
+### What is proporation of subscribers?
+
+```{r}
+trip %>% 
+  group_by(subscription_type) %>% 
+  count() %>% 
+  mutate(pct = n / nrow(trip))
+```
+
+```{r}
+trip %>% 
+  group_by(subscription_type, round_trip) %>% 
+  tally() %>% 
+  mutate(pct = n / sum(n))
+```
