@@ -36,9 +36,9 @@ load("sfcs_prepped.Rdata")
 ```
 
 ```{r read_status}
-status <- read_csv("data/raw/status.csv")
-str(status)
-summary(status)
+# status <- read_csv("data/raw/status.csv")
+# str(status)
+# summary(status)
 ```
 
 ## Ins and outs
@@ -59,6 +59,7 @@ dates <- seq(startdate, enddate, by='days')
 stations <- station$id
 stations2 <- unique(trip$start_station_id)
 stations3 <- unique(trip[,"start_station_id"])
+stations4 <- trip %>% distinct(start_station_id) %>% pull()
 date_station <- expand.grid(stations, dates)
 names(date_station) <- c("start_station_id", "trip_date")
 
