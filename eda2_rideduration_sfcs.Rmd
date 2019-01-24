@@ -53,11 +53,25 @@ mean(trip$duration < 7200)
 ```{r fig.width = 8, fig.height = 6}
 trip %>% 
   filter(duration < 7200) %>% 
-  ggplot() + geom_histogram(aes(x = duration), binwidth = 60) +
+  ggplot() + geom_histogram(aes(x = duration, y = ..density..), binwidth = 60) +
   coord_cartesian(xlim = c(0, 7500))
 ```
 
+```{r fig.width = 12, fig.height = 10}
+trip %>% 
+  filter(duration < 7200) %>% 
+  ggplot() + geom_histogram(aes(x = duration, y = ..density.., fill = round_trip), binwidth = 60) +
+  facet_grid(subscription_type ~ round_trip) +
+  coord_cartesian(xlim = c(0, 7500))
+```
 
+```{r fig.width = 8, fig.height = 6}
+trip %>% 
+  filter(duration < 7200) %>% 
+  ggplot() + stat_ecdf(aes(x = duration), geom = "step") +
+  facet_grid(subscription_type ~ round_trip) +
+  coord_cartesian(xlim = c(0, 7500))
+```
 
 ```{r}
 trip %>% 
@@ -83,22 +97,60 @@ trip %>%
 ```
 
 
+### Station level duration analaysis
 
-```{r boxplot_dow1, fig.width = 12, fig.height=10}
-tot_trips_bydatehour_sub %>% 
-  group_by(trip_date, weekday, start_hour) %>% 
-  summarise(
-    ntot = sum(n)
+Let's try to do the 2x2 histograms for the top 10 stations in terms of volume.
+
+```{r station_histos, fig.height=16, fig.width=12}
+top10starts <- trip %>% 
+  group_by(start_station_name) %>% 
+  summarize(
+    num_trips = n()
   ) %>% 
+  arrange(desc(num_trips)) %>% head(10)
 
-ggplot() + 
-  geom_boxplot(aes(x = as.factor(start_hour), y = ntot, colour = weekday)) + facet_grid(weekday ~ .) +
-  xlab("Hour of day") + ylab("Mean number of rentals per hour")
+trip %>% 
+  filter(duration < 7200, start_station_name %in% top10starts$start_station_name) %>% 
+  ggplot() + geom_histogram(aes(x = duration, y = ..density.., fill = round_trip), alpha=0.7, position="identity", binwidth = 60) +
+  facet_wrap(~start_station_name) +
+  coord_cartesian(xlim = c(0, 7500))
 ```
 
-```{r todplot2, fig.width = 12, fig.height=10}
-ggplot(statsby_weekday_hour_sub) + 
-  geom_bar(aes(x = start_hour, y = num_trips_mean, fill = sub_type), stat = "identity") +
-  facet_grid(weekday ~ .) +
-  xlab("Hour of day") + ylab("Mean number of rentals per hour")
+```{r station_histo2, fig.height=16, fig.width=12}
+trip %>% 
+  filter(duration < 7200, start_station_name %in% top10starts$start_station_name) %>% 
+  ggplot() + geom_histogram(aes(x = duration, y = ..density.., fill = round_trip), alpha=0.7, position="identity", binwidth = 60) +
+  facet_grid(start_station_name ~ subscription_type) +
+  coord_cartesian(xlim = c(0, 7500))
 ```
+
+```{r station_histo3, fig.height=16, fig.width=12}
+trip %>% 
+  filter(duration < 7200, start_station_name %in% top10starts$start_station_name) %>% 
+  ggplot() + geom_histogram(aes(x = duration, fill = round_trip), alpha=0.7, position="identity", binwidth = 60) +
+  facet_grid(start_station_name ~ subscription_type) +
+  coord_cartesian(xlim = c(0, 7500))
+```
+
+```{r station_histos4, fig.height=16, fig.width=12}
+top25starts_subscriber <- trip %>% 
+  filter(subscription_type == "Subscriber") %>% 
+  group_by(start_station_name) %>% 
+  summarize(
+    num_trips = n()
+  ) %>% 
+  arrange(desc(num_trips)) %>% head(25)
+
+trip %>% 
+  filter(duration < 7200, start_station_name %in% top25starts_subscriber$start_station_name) %>% 
+  ggplot() + geom_histogram(aes(x = duration, fill = round_trip), alpha=0.7, position="identity", binwidth = 60) +
+  facet_wrap(~start_station_name) +
+  coord_cartesian(xlim = c(0, 7500))
+```
+
+```{r top25station_box, fig.width=12}
+trip %>% 
+  filter(duration < 7200, start_station_name %in% top25starts_subscriber$start_station_name) %>% 
+  ggplot() + geom_boxplot(aes(x = start_station_name, y = duration)) + coord_flip()
+```
+

@@ -258,6 +258,13 @@ trip <- trip %>%
   mutate(round_trip = (start_station_id == end_station_id))
 ```
 
+```{r}
+trip$round_trip <- as.factor(trip$round_trip)
+levels(trip$round_trip) <- c("One way", "Round trip")
+
+```
+
+
 ### Trip geography
 
 Let's pull in the start and end cities (based on zip code in the `station` dataframe).

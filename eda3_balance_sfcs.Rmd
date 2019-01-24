@@ -1,0 +1,84 @@
+---
+title: "EDA for SFCS - station balance"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(scales)
+library(tidyr)
+library(readr)
+```
+
+## Introduction
+
+Let's look at station balance
+
+- net source or net destination
+- daily balance
+- number of bikes in use
+- number of bikes at station
+
+
+
+## Load data
+
+In initial_exploration_sfcs.Rmd we did some data prep work and saved updated versions of the data.
+
+```{r load_data}
+load("sfcs_prepped.Rdata")
+```
+
+```{r read_status}
+status <- read_csv("data/raw/status.csv")
+str(status)
+summary(status)
+```
+
+## Ins and outs
+
+Let's compute number of trips per day (?) out and in by station. Are inventories balanced at night? Status table should reveal the answer.
+
+```{r}
+trip %>% 
+  group_by(start_station_id, trip_date) %>% 
+  count()
+```
+
+```{r}
+startdate <- ymd("2014-01-01")
+enddate <- ymd("2015-08-31")
+
+dates <- seq(startdate, enddate, by='days')
+stations <- station$id
+stations2 <- unique(trip$start_station_id)
+stations3 <- unique(trip[,"start_station_id"])
+date_station <- expand.grid(stations, dates)
+names(date_station) <- c("start_station_id", "trip_date")
+
+# Get sorted by station and date
+date_station <- date_station %>% 
+  arrange(start_station_id, trip_date)
+
+# Count trips out
+num_out_station_date <- trip %>% 
+  filter(between(trip_date, startdate, enddate)) %>% 
+  group_by(start_station_id, trip_date) %>% 
+  count()
+
+# Join the fully seeded table, `date_hour_sub`, to `tot_trips_bydatehour_sub`. 
+
+num_out_station_date <- date_station %>% 
+  left_join(num_out_station_date, by = c("start_station_id", "trip_date"))
+
+# Replace the NAs with 0's.
+num_out_station_date$n <- num_out_station_date$n %>% replace_na(0)
+
+
+```
