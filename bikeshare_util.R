@@ -39,7 +39,7 @@ counts_by_date_group <- function(df, start, end, date_var, group_var){
     arrange(!!group_var, !!date_var)
   
   # Count trips out
-  counts_group_date <- trip %>% 
+  counts_group_date <- df %>% 
     filter(between(!!date_var, startdate, enddate)) %>% 
     group_by(!!group_var, !!date_var) %>% 
     count()
@@ -60,41 +60,54 @@ counts_by_date_groups <- function(df, start, end, date_var, ...){
   
   # Use enquo to enable dplyr style calling
   date_var <- enquo(date_var)
-  group_var <- group_var <- quos(...)
+  group_vars <- quos(...)
+  num_group_vars <- length(group_vars)
 
-  
   # Need to use quo_name() to convert group_var quosure to string to use as new column name
-  group_var_name <- quo_name(group_var)
+  group_var_names <- lapply(group_vars, quo_name)
   date_var_name <- quo_name(date_var)
+  all_names <- c(group_var_names, date_var_name)
   
+  # Create vector of dates over specified range
   dates <- seq(start, end, by='days')
-  
-  # Find distinct combinations of the grouping variables
-  grps <- df %>% distinct(!!group_var) 
-  
-  # Append the dates sequenc
+
+  # There may be some clever lapply approach to this, but I'm just going to
+  # use a loop to construct a list of vectors containing the unique values
+  # for each of the grouping fields (not including the date)
+  group_vals_unique <- list()
+  for (gvn in group_var_names){
+    unique_vals <- unique_vals_vector(df, gvn)
+    group_vals_unique <- c(group_vals_unique, list(unique_vals))
+  }
+  group_vals_unique <- c(group_vals_unique, list(dates))
   
   # Use expand.grid() to create the fully seeded dataframe
-  date_grp <- expand.grid(grp, dates)
-  names(date_grp) <- c(group_var_name, date_var_name)
-  
-  # Get sorted by station and date
-  date_grp <- date_grp %>% 
-    arrange(!!group_var, !!date_var)
-  
-  # Count trips out
-  counts_group_date <- trip %>% 
-    filter(between(!!date_var, startdate, enddate)) %>% 
-    group_by(!!group_var, !!date_var) %>% 
+  date_grps <- expand.grid(group_vals_unique)
+  names(date_grps) <- all_names
+
+  # Count events
+  counts_group_date <- df %>%
+    filter(between(!!date_var, startdate, enddate)) %>%
+    group_by(!!!group_vars, !!date_var) %>%
     count()
   
   # Join the fully seeded dataframe to the count dataframe 
-  counts_group_date <- date_grp %>% 
-    left_join(counts_group_date, by = c(group_var_name, date_var_name))
+  counts_group_date <- date_grps %>%
+    left_join(counts_group_date)
+
+  # Get sorted by group vars and date
+  counts_group_date <- counts_group_date %>%
+    arrange(!!!group_vars, !!date_var)
   
   # Replace the NAs with 0's.
   counts_group_date$n <- counts_group_date$n %>% replace_na(0)
-  
+ 
   counts_group_date
+  
+}
+
+unique_vals_vector <- function(df, col){
+  
+  unlist(unique(df[, col]), use.names = FALSE)
   
 }
