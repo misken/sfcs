@@ -1,5 +1,5 @@
 ---
-title: "Use R to explore station balance in bike share systems - a quosure based function approach"
+title: "Use R to explore station balance in bike share systems - and learn a little dplyr programming"
 output: html_document
 ---
 
@@ -7,17 +7,13 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r libraries}
+```{r libraries, echo=TRUE, warning=FALSE, results='hide', message=FALSE}
 library(dplyr)
 library(ggplot2)
 library(lubridate)
 library(readr)
+library(tidyr)
 ```
-
-```{r}
-source("bikeshare_util.R")
-```
-
 
 ## Introduction
 
@@ -78,12 +74,12 @@ station <- read_csv("data/raw/station.csv",
                      installation_date = col_date(format = "%m/%d/%Y")))
 
 station$id <- as.factor(station$id)
-str(station)
+str(station, give.attr=FALSE)
 ```
 
 Hmmm, should we convert `name` and `city` to factors? The `name` values will be in the `trip` table and
 we'll want to use join type operations to get station level information (e.g. the lat/lon). I guess
-I never thought carefully about this and was just trusting base R `merge` and `dplyr` to coerce
+I never thought carefully about this and was just trusting base R `merge` and dplyr joins to coerce
 factors to strings if needed (e.g. the levels in the two tables don't match perfectly). Some
 good posts on this are:
 
@@ -97,7 +93,7 @@ For dplyr, coercion to strings is done if needed and a warning raised.
 
 This is the primary table we'll use for analysis.
 
-```{r readtrip}
+```{r readtrip, warning=FALSE}
 trip <- read_csv("data/raw/trip.csv",
                  col_types = cols(id = col_integer(),
                      start_station_id = col_integer(),
@@ -123,7 +119,7 @@ trip$subscription_type <- as.factor(trip$subscription_type)
 trip$zip_code <- as.factor(trip$zip_code)
 ```
 
-For analytical convenience, let's create some new fields in the `trip` dataframe.
+For analytical convenience, let's create some new fields in the `trip` data frame.
 
 ### Date parts
 
@@ -165,7 +161,7 @@ levels(trip$round_trip) <- c("One way", "Round trip")
 
 ### Trip geography
 
-Let's pull in the start and end cities (based on zip code in the `station` dataframe) and create a few more fields based on the starting location and on ending location.
+Let's pull in the start and end cities (based on zip code in the `station` data frame) and create a few more fields based on the starting location and on ending location.
 
 ```{r}
 trip <- trip %>% 
@@ -187,16 +183,21 @@ trip <- trip %>%
 
 ```
 
-Here's our prepped `trip` dataframe:
+Here's our prepped `trip` data frame:
 
 ```{r trip_final}
 str(trip)
 ```
 
+Save for use in future analysis.
+
+```{r}
+save(station, trip, file = "data/processed/station_trip.Rdata")
+```
 
 ## Ins and outs by station
 
-Let's compute number of trips per day out and in by station, subtract the the number of outs from ins and call it `balance`. A positive value of
+Compute number of trips per day out and in by station, subtract the the number of outs from ins and call it `balance`. A positive value of
 balance corresponds to a station receiving more bikes during that day than
 departed from that station.
 
@@ -216,7 +217,7 @@ Since we
 eventually want to compute summary statistics for balance by station, care
 is required in doing the trip counts. There is no guarantee that every
 station has trips into and/or out of on every date in the range of 
-interest - i.e. there are "zero days". Let's see. The final counts of
+interest - i.e. there are "zero days". The final counts of
 the following query should be `r length(dates)` for all stations if 
 there were no zero days.
 
@@ -233,7 +234,7 @@ num_out_station_date %>%
 
 ```
 
-Clearly there are many zero days and ignoring them when computing
+Clearly there are zero days and ignoring them when computing
 quantities such as mean balance would lead to overestimates. Let's plot 
 the the number of non-zero days by station.
 
@@ -256,11 +257,11 @@ The main purpose of this post is to develop a pretty general R function for
 doing counts of events by date and one or more grouping fields. For example,
 we need number of arrivals and departures of bikes by date and station in
 order to compute balance. We might also want to compute things like the
-average number of rentals by hour of day, day of week and subscription type. It
+average number of rentals by station and subscription type. It
 would be nice to have an R function in which we could pass in the following
 input arguments:
 
-- dataframe
+- data frame
 - start date
 - end date
 - zero or more additional fields to group by
@@ -315,20 +316,20 @@ range(date_counts$nn)
 ```
 
 
-This is such a common task, it would be nice to have a function to do it. Ideally,
-it would be nice to pass multiple grouping fields along with a date range. To start,
-let's consider one grouping field. This is the goal.
+This is such a common task, it would be nice to have a function to do it.
+Ideally, it would be nice to pass multiple grouping fields along with a date
+range. To start, consider one grouping field. 
 
-Do counts bike trips out of each station.
+Do counts of bike trips out of each station. I want to be able to do this:
 
-```{r}
+```{r num_out_wish, eval=FALSE}
 num_out <- counts_by_date_group(trip, startdate, enddate, trip_date, start_station_id)
-num_out
+
 ```
 
 ## Creating the counts_by_date_group function
 
-The trickiness involved in creating this function is that I wanted to
+The trickiness involved in creating this function is that I want to
 be able to call it like a dplyr verb (unquoted column names) and to
 use dplyr itself in the function. The following dplyr vignette is
 essential reading - https://cran.r-project.org/web/packages/dplyr/vignettes/programming.html.
@@ -336,9 +337,10 @@ essential reading - https://cran.r-project.org/web/packages/dplyr/vignettes/prog
 A key concept is that of a *quosure* - a construct that stores both an expression as
 well as its environment. It's a special type of formula. Using the R Studio 
 debugging tools to step through the following function is a great way to
-see all the details.
+see all the details. The code is heavily commented, including alternative
+ways of doing a few things.
 
-```{r}
+```{r counts_by_date_group}
 counts_by_date_group <- function(df, start, end, date_var, group_var){
   
   # Use enquo to enable dplyr style calling. Both date_var and group_var are
@@ -394,18 +396,25 @@ counts_by_date_group <- function(df, start, end, date_var, group_var){
 Whew! Let's finish exploring the balance question and then we'll return to
 this and generalize our function to handle multiple grouping fields.
 
+```{r num_out}
+num_out <- counts_by_date_group(trip, startdate, enddate, trip_date, start_station_id)
+
+head(num_out)
+```
+
 ## Back to the balance analysis
 
 Now do counts of trips into each station.
 
-```{r}
+```{r num_in}
 num_in <- counts_by_date_group(trip, startdate, enddate, trip_date, end_station_id)
-num_in
+
+head(num_in)
 ```
 
 Compute overall flow balance as `num_in - num_out`.
 
-```{r}
+```{r balance}
 flow_balance_date <- num_in %>% 
   left_join(num_out, by = c("end_station_id" = "start_station_id", "trip_date"))
 
@@ -417,7 +426,7 @@ flow_balance_date <- flow_balance_date %>% mutate(
   balance = num_in - num_out
 )
 
-flow_balance_date
+head(flow_balance_date)
 ```
 
 Let's look at the distribution of balance by station using boxplots.
@@ -460,7 +469,7 @@ p
 ```
 
 
-Let's compute a bunch of summary stats. These are the things that would have
+Summary stats are the quantities that would have
 been computed incorrectly had we neglected to take care of the zero days.
 
 ```{r}
@@ -480,7 +489,7 @@ flow_balance_stats <- flow_balance_date %>%
   ) %>% 
   arrange(mean_balance)
 
-flow_balance_stats
+head(flow_balance_stats)
 ```
 
 Plot mean balance by station.
@@ -492,7 +501,7 @@ ggplot(flow_balance_stats) +
   coord_flip()
 ```
 
-Let's do median instead of mean.
+What about median instead of mean?
 
 ```{r fig.height=6, fig.width=3}
 ggplot(flow_balance_stats) +
@@ -505,7 +514,7 @@ ggplot(flow_balance_stats) +
 Obviously this is just a first look at balance. Lots more to do. But, let's get
 back to the function we wrote to do the counts by date and station. For this 
 application, a single grouping field is fine. However, what if we want to do
-stats by subscription type, day of week and hour of day?
+stats by station and subscription type?
 
 ## Generalizing the counts_by_date_group function
 
@@ -518,7 +527,7 @@ For now, I'm just going to do the multiple grouping fields and save the
 finer time bins for another day.
 
 I wrote a little helper function to return a vector of unique values
-from a specified dataframe and column.
+from a specified data frame and column.
 
 ```{r}
 unique_vals_vector <- function(df, col){
@@ -533,7 +542,7 @@ differently in our function. For example, the `quos()` function is used
 to create a list of quosures from the `...` arguments and the `!!!` operator is used to 
 splice this list of quosures into function calls (such as `group_by()`). 
 
-```{r}
+```{r counts_by_date_groups}
 counts_by_date_groups <- function(df, start, end, date_var,  ...){
   
   # Use enquo to enable dplyr style calling
@@ -561,7 +570,7 @@ counts_by_date_groups <- function(df, start, end, date_var,  ...){
   }
   group_vals_unique <- c(group_vals_unique, list(dates))
   
-  # Use expand.grid() to create the fully seeded dataframe
+  # Use expand.grid() to create the fully seeded data frame
   date_grps <- expand.grid(group_vals_unique)
   names(date_grps) <- all_names
 
@@ -572,7 +581,7 @@ counts_by_date_groups <- function(df, start, end, date_var,  ...){
     group_by(!!!group_vars, !!date_var) %>%
     count()
   
-  # Join the fully seeded dataframe to the count dataframe 
+  # Join the fully seeded data frame to the count data frame 
   counts_groups_date <- date_grps %>%
     left_join(counts_groups_date)
 
@@ -588,15 +597,15 @@ counts_by_date_groups <- function(df, start, end, date_var,  ...){
 }
 ```
 
-Let's count the number of trips by date, start station and subscription type.
+Now we can count the number of trips by date, start station and subscription type.
 
-```{r}
+```{r num_trips_start_sub}
 num_trips_start_sub <- counts_by_date_groups(trip, startdate, enddate, 
                                    trip_date, start_station_id, subscription_type)
 ```
 
-```{r}
-num_trips_start_sub %>% 
+```{r stats_trips_start_sub}
+stats_trips_start_sub <- num_trips_start_sub %>% 
   group_by(start_station_id, subscription_type) %>% 
   summarize(
     mean_numtrips = mean(n),
@@ -608,16 +617,104 @@ num_trips_start_sub %>%
     median_numtrips = median(n),
     q3_numtrips = quantile(n, 0.75),
     p95_numtrips = quantile(n, 0.95),
-    p99_numtrips = quantile(n, 0.99)
+    p99_numtrips = quantile(n, 0.99),
+    iqr_numtrips = q3_numtrips - q1_numtrips
   ) 
 
-
+head(stats_trips_start_sub)
 ```
 
-```{r}
-num_trips_start_sub_naive <- trip %>% 
+What if we had ignored the possibility of zero days? 
+
+```{r ignore_zdays}
+# Count trips
+num_trips_start_sub_ignorezdays <- trip %>% 
   filter(between(trip_date, startdate, enddate)) %>% 
   group_by(start_station_id, subscription_type, trip_date) %>% 
   count()
+
+# Summarize
+stats_trips_start_sub_ignorezdays <- num_trips_start_sub_ignorezdays %>% 
+  group_by(start_station_id, subscription_type) %>% 
+  summarize(
+    mean_numtrips = mean(n),
+    sd_numtrips = sd(n),
+    cv_numtrips = sd_numtrips / mean_numtrips,
+    p01_numtrips = quantile(n, 0.01),
+    p05_numtrips = quantile(n, 0.05),
+    q1_numtrips = quantile(n, 0.25),
+    median_numtrips = median(n),
+    q3_numtrips = quantile(n, 0.75),
+    p95_numtrips = quantile(n, 0.95),
+    p99_numtrips = quantile(n, 0.99),
+    iqr_numtrips = q3_numtrips - q1_numtrips
+  ) 
+
+head(stats_trips_start_sub_ignorezdays)
 ```
 
+Join the two summary stats data frames and then we can scatter individual
+statistics against each other (one having been computed with proper treatment
+of zero days and the other not).
+
+```{r join_stats}
+stats_joined <- stats_trips_start_sub %>% 
+  inner_join(stats_trips_start_sub_ignorezdays, 
+             by = c("start_station_id", "subscription_type"))
+
+g <- ggplot(stats_joined) +
+  xlab("Zero days included") +
+  ylab("Zero days ignored")
+
+g + ggtitle("Mean number of trips per day per station") +
+  geom_point(aes(x = mean_numtrips.x, y = mean_numtrips.y)) +
+  geom_abline()
+```
+
+For higher volume stations, of course, zero days are pretty rare. Let's
+zoom in on the lower volume stations.
+
+```{r fig.height=6, fig.width=6}
+g + ggtitle("Mean number of trips per day per station") +
+  geom_point(aes(x = mean_numtrips.x, y = mean_numtrips.y)) +
+  geom_abline() +
+  coord_cartesian(xlim=c(0,20), ylim=c(0, 20))
+  
+```
+
+Is the median less susceptible to zero day induced bias? Seems like it should be since less affected by outliers. But, integer nature of the data may lead
+to bias. While we are at it, let's try an upper quantile and a measure
+of variability.
+
+```{r fig.height=6, fig.width=6}
+g + ggtitle("Median number of trips per day per station") +
+  geom_point(aes(x = median_numtrips.x, y = median_numtrips.y)) +
+  geom_abline() +
+  coord_cartesian(xlim=c(0,20), ylim=c(0, 20))
+
+g + ggtitle("95th %ile number of trips per day per station") +
+  geom_point(aes(x = p95_numtrips.x, y = p95_numtrips.y)) +
+  geom_abline() +
+  coord_cartesian(xlim=c(0,20), ylim=c(0, 20)) 
+
+g + ggtitle("Std dev of number of trips per day per station") +
+  geom_point(aes(x = sd_numtrips.x, y = sd_numtrips.y)) +
+  geom_abline() +
+  coord_cartesian(xlim=c(0,15), ylim=c(0, 15))
+
+g + ggtitle("IQR of number of trips per day per station") +
+  geom_point(aes(x = iqr_numtrips.x, y = iqr_numtrips.y)) +
+  geom_abline() +
+  coord_cartesian(xlim=c(0,15), ylim=c(0, 15))
+```
+
+As we might have guessed, ignoring zero days can cause means and quantiles 
+to be overestimated and measures of variability to be underestimated.
+
+Seems like a good place to stop for now. Next steps:
+
+- make sure this works for zero grouping fields
+- extend as needed to do day of week and time of day based analysis for zero or more grouping fields
+- tidy up the code, create documentation, create package and release
+
+You can find this post along with a pile of other related, but unorganized, code in the following GitHub repo - https://github.com/misken/sfcs.
