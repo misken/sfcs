@@ -79,7 +79,23 @@ num_out_station_date <- trip %>%
   filter(between(trip_date, startdate, enddate)) %>% 
   group_by(start_station_id, trip_date) %>% 
   count()
+```
 
+To confirm that we have missing rows correspond to 0 rides on that date from
+that station, we can count records by station. The max number of records for
+any station is the length of the `dates` vector - `r length(dates)`.
+
+```{r}
+num_out_station_date %>% 
+  group_by(start_station_id) %>% 
+  count()
+```
+```{r}
+ggplot(num_out_station_date) + geom_bar(aes(x=start_station_id))
+```
+
+
+```{r}
 # Join the fully seeded table, `date_station`, to `num_out_station_date`. 
 
 num_out_station_date <- date_station %>% 
@@ -89,6 +105,12 @@ num_out_station_date <- date_station %>%
 num_out_station_date$n <- num_out_station_date$n %>% replace_na(0)
 
 
+```
+
+Let's confirm.
+
+```{r}
+ggplot(num_out_station_date) + geom_bar(aes(x=start_station_id))
 ```
 
 This is such a common task, it would be nice to have a function to do it. Ideally,
@@ -111,6 +133,8 @@ flow_balance_date <- num_in %>%
   left_join(num_out, by = c("end_station_id" = "start_station_id", "trip_date"))
 
 names(flow_balance_date) <- c("station_id", "trip_date", "num_in", "num_out")
+
+flow_balance_date$station_id <- as.factor(flow_balance_date$station_id)
 
 flow_balance_date <- flow_balance_date %>% mutate(
   balance = num_in - num_out
@@ -135,6 +159,8 @@ flow_balance_type_date <- num_in_type %>%
 
 names(flow_balance_type_date) <- c("station_id", "trip_type", "trip_date", "num_in", "num_out")
 
+flow_balance_type_date$station_id <- as.factor(flow_balance_type_date$station_id)
+
 flow_balance_type_date <- flow_balance_type_date %>% mutate(
   balance = num_in - num_out
 )
@@ -158,7 +184,7 @@ flow_balance_type_date %>%
 
 ```{r}
 flow_balance_type_date %>% 
-  filter(round_trip == "Round trip", abs(balance) > 0)
+  filter(trip_type == "Round trip", abs(balance) > 0)
 ```
 
 ```{r}
@@ -174,9 +200,43 @@ flow_balance_type_date %>%
 
 ```{r box_station}
 
-ggplot(flow_balance_date) + geom_boxplot(aes(x = as.factor(station_id), y = balance))
+ggplot(flow_balance_date) + 
+  geom_boxplot(aes(x = station_id, y = balance),
+               outlier.size = 0.1,
+               outlier.shape = 20)
   
 ```
+
+Let's try to make it look nicer. Get ideas from
+
+http://shinyapps.stat.ubc.ca/r-graph-catalog/#fig04-11_museum-exhibitions-box-plot
+
+Also, if you want to "zoom in" on the plot by changing the y-axis limits,
+it's important to change the limits with the coordinate system and not the
+axis scale (e.g. inside of `scale_y_continuous`). The former doesn't throw
+out the points outside the limits (important for properly computing boxplot
+elements) whereas latter does.
+
+https://www.r-graph-gallery.com/269-ggplot2-boxplot-with-average-value/
+
+```{r fig.height=12, fig.width=6}
+p <- ggplot(flow_balance_date, aes(x = station_id, y = balance)) +
+  geom_boxplot(outlier.shape = 20, outlier.size = 0.1) + 
+  labs(x = NULL, y = "Balance") + 
+  coord_flip(ylim=c(-50, 50)) +
+  geom_hline(aes(yintercept = 0)) +
+  stat_summary(fun.y=mean, geom="point", shape=20, size=1, color="red", fill="red") +
+  ggtitle("Station balance") +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.title = element_text(size = rel(1.2), face = "bold", vjust = 1.5),
+        axis.ticks.y = element_blank(),
+        axis.title.y = element_blank())
+
+p
+```
+
 
 Let's zoom in.
 
@@ -191,13 +251,13 @@ ggplot(flow_balance_date) +
 ```{r box_station3}
 
 ggplot(flow_balance_date) + 
-  geom_boxplot(aes(x = as.factor(station_id), y = balance)) +
+  geom_boxplot(aes(x = station_id, y = balance)) +
   coord_cartesian(ylim = c(-30, 30))
   
 ```
 
 ```{r}
-flow_balance_date %>% 
+flow_balance_stats <- flow_balance_date %>% 
   group_by(station_id) %>% 
   summarize(
     mean_balance = mean(balance),
@@ -212,5 +272,26 @@ flow_balance_date %>%
     p99_balance = quantile(balance, 0.99)
   ) %>% 
   arrange(mean_balance)
+
+flow_balance_stats
 ```
 
+```{r}
+ggplot(flow_balance_stats) +
+  geom_bar(aes(x=station_id, y=mean_balance), stat = "identity")
+```
+
+```{r fig.height=10, fig.width=5}
+ggplot(flow_balance_stats) +
+  geom_bar(aes(x=reorder(station_id, mean_balance), y=mean_balance), 
+           stat = "identity") +
+  coord_flip()
+```
+
+```{r fig.height=6, fig.width=3}
+ggplot(flow_balance_stats) +
+  geom_bar(aes(x=reorder(station_id, median_balance), y=median_balance), 
+           stat = "identity") +
+  theme(axis.text.y = element_text(size=6)) +
+  coord_flip()
+```
