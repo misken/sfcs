@@ -15,17 +15,173 @@ library(scales)
 library(tidyr)
 ```
 
-```{r}
-source("bikeshare_util.R")
-```
-
-
 ## Load data
 
 In initial_exploration_sfcs.Rmd we did some data prep work and saved updated versions of the data.
 
 ```{r load_data}
-load("data/processed/sfcs_prepped.Rdata")
+load("sfcs_prepped.Rdata")
+```
+
+```{r}
+str(trip)
+```
+
+```{r}
+summary(trip)
+```
+
+
+## EDA of trip locations and types
+
+Some of these were also done in the initial_exploration_sfcs.Rmd file.
+
+### What are popular rental locations and trips?
+
+Popular start locations
+
+```{r count_starting}
+trip %>% 
+  group_by(start_station_name) %>% 
+  summarize(
+    num_trips = n()
+  ) %>% 
+  arrange(desc(num_trips))
+```
+
+Popular ending locations
+
+```{r count_ending}
+trip %>% 
+  group_by(end_station_name) %>% 
+  summarize(
+    num_trips = n()
+  ) %>% 
+  arrange(desc(num_trips))
+```
+
+Popular trips
+
+```{r count_trips}
+trip %>% 
+  group_by(start_station_id, end_station_id) %>% 
+  summarize(
+    num_trips = n()
+  ) %>% 
+  arrange(desc(num_trips))
+```
+
+Popular round trips
+
+```{r count_roundtrips}
+trip %>% 
+  filter(round_trip) %>% 
+  group_by(start_station_name) %>% 
+  summarize(
+    num_trips = n()
+  ) %>% 
+  arrange(desc(num_trips))
+```
+
+### What percent of trips are round trips?
+
+Let's use table.
+
+```{r table_roundtrip}
+table(trip$round_trip)
+```
+
+```{r proptable_roundtrip}
+prop.table(x = table(trip$round_trip))
+```
+
+Try to do it with dplyr.
+
+The dplyr `tally` command looks like the trick.
+
+https://dplyr.tidyverse.org/reference/tally.html
+
+```{r tally_roundtrip}
+trip %>% 
+  group_by(round_trip) %>% 
+  tally()
+```
+
+```{r pcttally_roundtrip}
+trip %>% 
+  group_by(round_trip) %>% 
+  tally() %>% 
+  mutate(pct = n / sum(n))
+```
+
+Let's try with multiple grouping fields. Will the percentages be within groups?
+
+```{r pcttally2}
+trip %>% 
+  group_by(start_city, round_trip) %>% 
+  tally() %>% 
+  mutate(pct = n / sum(n))
+```
+
+```{r}
+trip %>% 
+  group_by(start_city, round_trip) %>% 
+  tally()
+```
+
+Repeated use of `tally` progressively aggregates up the groupling fields.
+
+```{r tally_repeat}
+trip %>% 
+  group_by(start_city, round_trip) %>% 
+  tally() %>% 
+  tally()
+```
+
+To get individual cell frequencies, need to divide by total number of rows in `trip` dataframe.
+
+```{r cellfreq}
+trip %>% 
+  group_by(start_city, round_trip) %>% 
+  tally() %>% 
+  mutate(pct = n / nrow(trip))
+```
+
+Let's do city to city counts.
+
+```{r count_citypairs}
+table(trip$start_city, trip$end_city)
+```
+
+Obviously, the vast majority of trips are within San Francisco.
+
+What exactly is the `table()` function returning.
+
+```{r}
+class(table(trip$start_city, trip$end_city))
+```
+
+According to the doc page at https://www.rdocumentation.org/packages/base/versions/3.5.2/topics/table, a
+`table` is essentially an array of integers.
+
+```{r proptable_citypairs}
+prop.table(table(trip$start_city, trip$end_city))
+```
+
+### What is proporation of subscribers?
+
+```{r pct_subscription}
+trip %>% 
+  group_by(subscription_type) %>% 
+  count() %>% 
+  mutate(pct = n / nrow(trip))
+```
+
+```{r pct_subscription_roundtrip}
+trip %>% 
+  group_by(subscription_type, round_trip) %>% 
+  tally() %>% 
+  mutate(pct = n / sum(n))
 ```
 
 ## Trends in cycle share use
@@ -80,43 +236,6 @@ ggplot() +
 
 ```
 
-## Does counts_by_date_groups work with zero groups?
-
-
-```{r}
-startdate <- ymd("2014-01-01")
-enddate <- ymd("2015-08-31")
-```
-
-Designed to work with >= 1 grouping fields.
-
-```{r}
-counts_by_date_groups(trip, startdate, enddate, 
-                      trip_date, start_station_id, subscription_type)
-
-counts_by_date_groups(trip, startdate, enddate, 
-                      trip_date, start_station_id, subscription_type, 
-                      dow=0, daytype = FALSE)
-
-counts_by_date_groups(trip, startdate, enddate, 
-                      trip_date, start_station_id, subscription_type, dow=2)
-
-counts_by_date_groups(trip, startdate, enddate, 
-                      trip_date, start_station_id, subscription_type, dow=3)
-```
-
-```{r}
-counts_by_date_groups(trip, startdate, enddate, 
-                      trip_date, subscription_type)
-```
-
-```{r}
-counts_by_date_groups(trip, startdate, enddate, 
-                      trip_date)
-```
-
-Nice. It works just fine with no grouping fields.
-
 ## Day of week analysis
 
 Let's ignore the "start up" period and focus on January 2014 - August 2015.
@@ -127,8 +246,8 @@ with zero riders. Pretty unlikely with the full dataset but could easily happen 
 Let's start with overall average number of riders by day of week.
 
 ```{r trips_bydate}
-startdate <- ymd_hms("2014-01-01 00:00:00")
-enddate <- ymd_hms("2015-08-31 00:00:00")
+startdate <- ymd("2014-01-01")
+enddate <- ymd("2015-08-31")
 
 tot_trips_bydate <- trip %>% 
   filter(between(trip_date, startdate, enddate)) %>% 
@@ -181,20 +300,6 @@ stats_trips_bydate <- tot_trips_bydate %>%
 
 stats_trips_bydate
 ```
-
-We should also be able to do it with the `counts_by_date_groups` function?
-
-Umm, no.
-
-```{r}
-tot_trips_bydate_dow <- counts_by_date_groups(trip, startdate, enddate, trip_date, start_station_id)
-```
-
-```{r}
-tot_trips_bydate_dow
-```
-
-
 
 ```{r}
 ggplot(stats_trips_bydate) + geom_bar(aes(x = dow, y = num_trips_mean), stat = "identity") +
@@ -354,7 +459,11 @@ stats_bydate_station
 
 How different are the means in `stats_bydate_station` and `stats_bydate_station_1` (the overestimates)?
 
-
+```{r}
+ggplot(data.frame(unbiased_mean = stats_bydate_station$num_trips_mean,
+                  biased_mean = stats_bydate_station_1$num_trips_mean)) +
+  geom_point(aes(x = unbiased_mean, y = biased_mean))
+```
 
 ```{r}
 ggplot(data.frame(unbiased_mean = stats_bydate_station$num_trips_mean,
@@ -369,8 +478,8 @@ ggplot(data.frame(unbiased_mean = stats_bydate_station$num_trips_mean,
 
 ```{r}
 tot_trips_bydatehour_sub <- trip %>% 
-  filter(between(as_datetime(trip_date), startdate, enddate)) %>% 
-  group_by(trip_datetime=floor_date(start_date, "1 hours"), sub_type = subscription_type) %>% 
+  filter(between(trip_date, startdate, enddate)) %>% 
+  group_by(trip_date, start_hour, sub_type = subscription_type) %>% 
   count()
 
 
@@ -378,19 +487,20 @@ tot_trips_bydatehour_sub
 ```
 
 ```{r}
-datetimes <- seq(startdate, enddate, by='1 hours')
+dates <- seq(startdate, enddate, by='days')
+hours <- 0:23
 subtypes <- unique(trip$subscription_type)
-datetime_sub <- expand.grid(subtypes, datetimes)
-names(datetime_sub) <- c("sub_type", "trip_datetime")
+date_hour_sub <- expand.grid(subtypes, dates, hours)
+names(date_hour_sub) <- c("sub_type", "trip_date", "start_hour")
 
 # Get sorted by station and date
-datetime_sub <- datetime_sub %>% 
-  arrange(sub_type, trip_datetime)
+date_hour_sub <- date_hour_sub %>% 
+  arrange(sub_type, trip_date, start_hour)
 
 # Join the fully seeded table, `date_hour_sub`, to `tot_trips_bydatehour_sub`. 
 
-tot_trips_bydatehour_sub <- datetime_sub %>% 
-  left_join(tot_trips_bydatehour_sub, by = c("sub_type", "trip_datetime"))
+tot_trips_bydatehour_sub <- date_hour_sub %>% 
+  left_join(tot_trips_bydatehour_sub, by = c("sub_type", "trip_date", "start_hour"))
 
 # Replace the NAs with 0's.
 tot_trips_bydatehour_sub$n <- tot_trips_bydatehour_sub$n %>% replace_na(0)
@@ -406,7 +516,7 @@ levels(tot_trips_bydatehour_sub$weekday) <- c("Weekend", "Weekday")
 
 # Compute summary stats by dow, hour, sub
 statsby_dow_hour_sub <- tot_trips_bydatehour_sub %>% 
-  group_by(sub_type, dow, trip_hour = hour(trip_datetime)) %>% 
+  group_by(sub_type, dow, start_hour) %>% 
   summarize(
     num_weeks = n(),
     num_trips_mean = mean(n),
@@ -425,7 +535,7 @@ statsby_dow_hour_sub
 
 # Compute summary stats by weekday, hour, sub
 statsby_weekday_hour_sub <- tot_trips_bydatehour_sub %>% 
-  group_by(sub_type,  weekday, trip_hour = hour(trip_datetime)) %>% 
+  group_by(sub_type,  weekday, start_hour) %>% 
   summarize(
     num_weeks = n(),
     num_trips_mean = mean(n),
@@ -470,13 +580,3 @@ ggplot(statsby_weekday_hour_sub) +
   facet_grid(weekday ~ .) +
   xlab("Hour of day") + ylab("Mean number of rentals per hour")
 ```
-
-```{r}
-num_trips_start_sub <- counts_by_datetime_groups(trip, startdate, enddate, 
-                                   start_date, by='1 hour', start_station_id)
-```
-
-```{r}
-num_trips_start_sub
-```
-

@@ -56,14 +56,15 @@ counts_by_date_group <- function(df, start, end, date_var, group_var){
 }
 
 # Extend to handle multiple grouping fields
-counts_by_date_groups <- function(df, start, end, date_var, ...){
+counts_by_date_groups <- function(df, start, end, date_var, ..., dow=1, daytype=TRUE){
   
   # Use enquo to enable dplyr style calling
   date_var <- enquo(date_var)
   group_vars <- quos(...)
   num_group_vars <- length(group_vars)
 
-  # Need to use quo_name() to convert group_var quosure to string to use as new column name
+  # Need to use quo_name() to convert group_var quosure to string to 
+  # use as new column name
   group_var_names <- lapply(group_vars, quo_name)
   date_var_name <- quo_name(date_var)
   all_names <- c(group_var_names, date_var_name)
@@ -101,13 +102,105 @@ counts_by_date_groups <- function(df, start, end, date_var, ...){
   
   # Replace the NAs with 0's.
   counts_group_date$n <- counts_group_date$n %>% replace_na(0)
+  
+  # Add day of week fields 
+  if(dow == 1){
+    counts_group_date$dow <- wday(counts_group_date[, date_var_name])
+  } else if(dow == 2){
+    counts_group_date$dow <- wday(counts_group_date[, date_var_name], 
+                                  label = TRUE)
+  } else if(dow == 3){
+    counts_group_date$dow <- wday(counts_group_date[, date_var_name], 
+                                  label = TRUE, abbr = FALSE)
+  }
+  
+  if(daytype){
+    counts_group_date$daytype <- 
+      ifelse(wday(counts_group_date[, date_var_name]) %in% 2:6,
+             "weekday",
+             "weekend")
+  }
  
   counts_group_date
+  
+}
+
+# Extend to handle multiple grouping fields and datetimes
+counts_by_datetime_groups <- function(df, start, end, datetime_var, by, ..., dow=1, daytype=TRUE){
+  
+  # Use enquo to enable dplyr style calling
+  datetime_var <- enquo(datetime_var)
+  group_vars <- quos(...)
+  num_group_vars <- length(group_vars)
+  
+  # Need to use quo_name() to convert group_var quosure to string to 
+  # use as new column name
+  group_var_names <- lapply(group_vars, quo_name)
+  datetime_var_name <- quo_name(datetime_var)
+  all_names <- c(group_var_names, datetime_var_name)
+  
+  # Create vector of dates over specified range
+  datetimes <- seq(start, end, by=by)
+  
+  # There may be some clever lapply approach to this, but I'm just going to
+  # use a loop to construct a list of vectors containing the unique values
+  # for each of the grouping fields (not including the date)
+  group_vals_unique <- list()
+  for (gvn in group_var_names){
+    unique_vals <- unique_vals_vector(df, gvn)
+    group_vals_unique <- c(group_vals_unique, list(unique_vals))
+  }
+  group_vals_unique <- c(group_vals_unique, list(datetimes))
+  
+  # Use expand.grid() to create the fully seeded dataframe
+  datetime_grps <- expand.grid(group_vals_unique)
+  names(datetime_grps) <- all_names
+  
+  # Count events
+  counts_groups_datetime <- df %>%
+    filter(between(!!datetime_var, startdate, enddate)) %>%
+    group_by(!!!group_vars, !!datetime_var) %>%
+    count()
+  
+  # Join the fully seeded dataframe to the count dataframe 
+  counts_groups_datetime <- datetime_grps %>%
+    left_join(counts_groups_datetime)
+  
+  # Get sorted by group vars and date
+  counts_groups_datetime <- counts_groups_datetime %>%
+    arrange(!!!group_vars, !!datetime_var)
+  
+  # Replace the NAs with 0's.
+  counts_groups_datetime$n <- counts_groups_datetime$n %>% replace_na(0)
+  
+  # Add day of week fields 
+  if(dow == 1){
+    counts_groups_datetime$dow <- wday(counts_groups_datetime[, datetime_var_name])
+  } else if(dow == 2){
+    counts_groups_datetime$dow <- wday(counts_groups_datetime[, datetime_var_name], 
+                                  label = TRUE)
+  } else if(dow == 3){
+    counts_groups_datetime$dow <- wday(counts_groups_datetime[, datetime_var_name], 
+                                  label = TRUE, abbr = FALSE)
+  }
+  
+  if(daytype){
+    counts_groups_datetime$daytype <- 
+      ifelse(wday(counts_groups_datetime[, datetime_var_name]) %in% 2:6,
+             "weekday",
+             "weekend")
+  }
+  
+  counts_groups_datetime
   
 }
 
 unique_vals_vector <- function(df, col){
   
   unlist(unique(df[, col]), use.names = FALSE)
+  
+}
+
+stats_by_datetime_groups <- function(df, suffix = "_n") {
   
 }

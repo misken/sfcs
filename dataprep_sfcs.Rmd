@@ -1,0 +1,193 @@
+---
+title: "Data preparation of SF Cycle Share data"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries, echo=TRUE, warning=FALSE, results='hide', message=FALSE}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(readr)
+library(tidyr)
+```
+
+## Introduction
+
+Dataset source: https://www.kaggle.com/benhamner/sf-bay-area-bike-share/version/1
+
+I haven't really analyzed San Francisco Cycle Share data yet. It should make for a good blog post or two (or Kaggle kernel) as well as an EDA assignment in R for pcda class. There are several files:
+
+- station.csv - one row per station. Includes lat/lon, city, dock count and install date
+- status.csv - like a hillmaker bydate table at the minute level by station with bikes available and docks available
+- trip.csv - one row per trip with standard fields. Includes a zip code that is user entered (according to answer in Discussion forum)
+- weather.csv - one row per date per zip code with min, mean, and max of several weather related variables. In Discussion forum, I found this about the zip code:
+
+    Also, FYI: There are five cities that the BABS program operates in including the following:
+
+    city <- c ("San Francisco", "Redwood City", "Palo Alto", "Mountain View", "San Jose")
+    
+    These should correspond with…
+    
+    zip_code
+    [1] 94107 94063 94301 94041 95113
+
+In addition there's a SQLite database containing the same four data tables. 
+
+**TODO** - check if DB Browser for SQLite is installed on pcda vm.
+
+
+## Station data
+
+Read in the csv file and do a little data type fixing using the readr package.
+
+```{r read_data}
+station <- read_csv("data/raw/station.csv",
+    col_types = cols(id = col_integer(),
+                     dock_count = col_integer(),
+                     installation_date = col_date(format = "%m/%d/%Y")))
+
+station$id <- as.factor(station$id)
+str(station, give.attr=FALSE)
+```
+
+Hmmm, should we convert `name` and `city` to factors? The `name` values will be in the `trip` table and
+we'll want to use join type operations to get station level information (e.g. the lat/lon). I guess
+I never thought carefully about this and was just trusting base R `merge` and dplyr joins to coerce
+factors to strings if needed (e.g. the levels in the two tables don't match perfectly). Some
+good posts on this are:
+
+- https://rpubs.com/hadley/45044
+- https://stackoverflow.com/questions/23802571/safely-merge-data-frames-by-factor-columns
+- https://stackoverflow.com/questions/30468412/dplyr-join-warning-joining-factors-with-different-levels
+
+For dplyr, coercion to strings is done if needed and a warning raised.
+
+## Trip data
+
+This is the primary table we'll use for analysis.
+
+```{r readtrip, warning=FALSE}
+trip <- read_csv("data/raw/trip.csv",
+                 col_types = cols(id = col_integer(),
+                     start_station_id = col_integer(),
+                     end_station_id = col_integer(),
+                     bike_id = col_integer(),
+                     zip_code = col_integer()))
+
+```
+
+Convert start and end dates to date times.
+
+```{r convdates}
+trip$start_date <- as.POSIXct(trip$start_date, format="%m/%d/%Y %H:%M")
+trip$end_date <- as.POSIXct(trip$end_date, format="%m/%d/%Y %H:%M")
+```
+
+Let's convert some of the fields to factors.
+
+```{r factors}
+trip$start_station_id <- as.factor(trip$start_station_id)
+trip$end_station_id <- as.factor(trip$end_station_id)
+trip$subscription_type <- as.factor(trip$subscription_type)
+trip$zip_code <- as.factor(trip$zip_code)
+```
+
+For analytical convenience, let's create some new fields in the `trip` data frame.
+
+### Date parts
+
+Use the `start_date` as a basis and add some date part fields.
+
+```{r feng_datepart}
+trip <- trip %>% 
+  mutate(trip_date = date(start_date),
+         start_year = year(start_date),
+         start_month = month(start_date),
+         start_hour = hour(start_date),
+         start_dow = wday(start_date),
+         trip_ym = floor_date(start_date, "month"))
+```
+
+We'll likely want to do some day of week analysis.
+
+```{r feng_dow}
+trip$start_dow <- as.factor(trip$start_dow)
+levels(trip$start_dow) <- c("Su", "Mo", "Tu", "We", "Th", "Fr", "Sa")
+
+trip$start_weekday <- trip$start_dow %in% 2:6
+trip$start_weekday <- as.factor(trip$start_weekday)
+levels(trip$start_weekday) <- c("Weekend", "Weekday")
+```
+
+### Trip type
+
+If start and end points are the same, it's a "round trip".
+
+```{r round_trip}
+trip <- trip %>% 
+  mutate(round_trip = (start_station_id == end_station_id))
+
+trip$round_trip <- as.factor(trip$round_trip)
+levels(trip$round_trip) <- c("One way", "Round trip")
+```
+
+
+### Trip geography
+
+Let's pull in the start and end cities (based on zip code in the `station` data frame) and create a few more fields based on the starting location and on ending location.
+
+```{r city1}
+trip <- trip %>% 
+  left_join(station, by = c("start_station_id" = "id")) %>%
+  mutate(start_city = city,
+         start_lat = lat,
+         start_long = long) %>% 
+  select(-c(city, name, lat, long, dock_count, installation_date))
+
+```
+
+```{r city2}
+trip <- trip %>% 
+  left_join(station, by = c("end_station_id" = "id")) %>%
+  mutate(end_city = city,
+         end_lat = lat,
+         end_long = long) %>% 
+  select(-c(city, name, lat, long, dock_count, installation_date))
+
+```
+
+Here's our prepped `trip` data frame:
+
+```{r trip_final}
+str(trip)
+```
+
+## Weather data
+
+```{r readweather}
+weather <- read_csv("data/raw/weather.csv")
+str(weather)
+summary(weather)
+```
+
+Fix up data types for `date` and `precipitation_inches`.
+
+```{r}
+weather$date <- as.POSIXct(weather$date, format="%m/%d/%Y")
+weather$precipitation_inches <- as.numeric(weather$precipitation_inches)
+```
+
+```{r}
+summary(weather)
+```
+
+## Save data
+
+```{r}
+save(station, trip, weather, file = "data/processed/sfcs_prepped.Rdata")
+```
+
